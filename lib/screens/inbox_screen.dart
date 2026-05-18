@@ -126,7 +126,7 @@ class _InboxHeader extends StatelessWidget {
                       text: const TextSpan(
                         children: [
                           TextSpan(
-                            text: 'Secure',
+                            text: 'Vault',
                             style: TextStyle(
                               color: SecureChatColors.text,
                               fontSize: 29,

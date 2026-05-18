@@ -9,6 +9,7 @@ class MessageModel {
   final String peerPublicKey;
   final DateTime createdAt;
   final bool isFromRelay;
+  final DateTime? expiresAt; // NOU — null = niciodată
 
   const MessageModel({
     required this.id,
@@ -21,7 +22,13 @@ class MessageModel {
     required this.peerPublicKey,
     required this.createdAt,
     required this.isFromRelay,
+    this.expiresAt,
   });
+
+  bool get isExpired {
+    if (expiresAt == null) return false;
+    return DateTime.now().isAfter(expiresAt!);
+  }
 
   Map<String, dynamic> toMap() {
     return {
@@ -35,11 +42,13 @@ class MessageModel {
       'peerPublicKey': peerPublicKey,
       'createdAtMillis': createdAt.millisecondsSinceEpoch,
       'isFromRelay': isFromRelay,
+      'expiresAtMillis': expiresAt?.millisecondsSinceEpoch,
     };
   }
 
   factory MessageModel.fromMap(Map<dynamic, dynamic> map) {
     final createdAtMillis = map['createdAtMillis'];
+    final expiresAtMillis = map['expiresAtMillis'];
 
     final senderPublicKey = (map['senderPublicKey'] ?? '').toString();
     final recipientPublicKey = (map['recipientPublicKey'] ?? '').toString();
@@ -63,6 +72,13 @@ class MessageModel {
             : int.tryParse('$createdAtMillis') ?? 0,
       ),
       isFromRelay: map['isFromRelay'] == true,
+      expiresAt: expiresAtMillis != null
+          ? DateTime.fromMillisecondsSinceEpoch(
+              expiresAtMillis is int
+                  ? expiresAtMillis
+                  : int.tryParse('$expiresAtMillis') ?? 0,
+            )
+          : null,
     );
   }
 
@@ -77,6 +93,8 @@ class MessageModel {
     String? peerPublicKey,
     DateTime? createdAt,
     bool? isFromRelay,
+    DateTime? expiresAt,
+    bool clearExpiry = false,
   }) {
     return MessageModel(
       id: id ?? this.id,
@@ -89,6 +107,7 @@ class MessageModel {
       peerPublicKey: peerPublicKey ?? this.peerPublicKey,
       createdAt: createdAt ?? this.createdAt,
       isFromRelay: isFromRelay ?? this.isFromRelay,
+      expiresAt: clearExpiry ? null : (expiresAt ?? this.expiresAt),
     );
   }
 

@@ -15,11 +15,11 @@ import 'services/pin_lock_service.dart';
 import 'theme/secure_chat_theme.dart';
 
 void main() {
-  runApp(const SecureChatApp());
+  runApp(const VaultChatApp());
 }
 
-class SecureChatApp extends StatelessWidget {
-  const SecureChatApp({super.key});
+class VaultChatApp extends StatelessWidget {
+  const VaultChatApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -177,7 +177,7 @@ class _PinGateState extends State<PinGate> {
     try {
       await _pinService.createPin(_newPin);
       if (!mounted) return;
-      _openSecureChatRoot();
+      _openVaultChatRoot();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -201,7 +201,7 @@ class _PinGateState extends State<PinGate> {
       if (!mounted) return;
 
       if (result.success) {
-        _openSecureChatRoot();
+        _openVaultChatRoot();
         return;
       }
 
@@ -262,9 +262,9 @@ class _PinGateState extends State<PinGate> {
     );
   }
 
-  void _openSecureChatRoot() {
+  void _openVaultChatRoot() {
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(builder: (_) => const SecureChatRoot()),
+      MaterialPageRoute<void>(builder: (_) => const VaultChatRoot()),
     );
   }
 
@@ -558,14 +558,14 @@ class _PinKeyboard extends StatelessWidget {
   }
 }
 
-class SecureChatRoot extends StatefulWidget {
-  const SecureChatRoot({super.key});
+class VaultChatRoot extends StatefulWidget {
+  const VaultChatRoot({super.key});
 
   @override
-  State<SecureChatRoot> createState() => _SecureChatRootState();
+  State<VaultChatRoot> createState() => _VaultChatRootState();
 }
 
-class _SecureChatRootState extends State<SecureChatRoot>
+class _VaultChatRootState extends State<VaultChatRoot>
     with WidgetsBindingObserver {
   static const List<String> _relayUrls = [
     'wss://relay.damus.io',
@@ -583,6 +583,7 @@ class _SecureChatRootState extends State<SecureChatRoot>
 
   StreamSubscription<SecureChatConnectionSnapshot>? _statusSubscription;
   StreamSubscription<MessageModel>? _incomingMessageSubscription;
+  StreamSubscription<RemoteConversationCommand>? _remoteCommandSubscription;
 
   bool _isLoading = true;
   String? _startupError;
@@ -651,6 +652,8 @@ class _SecureChatRootState extends State<SecureChatRoot>
     _statusSubscription = null;
     await _incomingMessageSubscription?.cancel();
     _incomingMessageSubscription = null;
+    await _remoteCommandSubscription?.cancel();
+    _remoteCommandSubscription = null;
     await _connectionService?.dispose();
     _connectionService = null;
     await _storageService?.close();
@@ -716,6 +719,18 @@ class _SecureChatRootState extends State<SecureChatRoot>
       await _reloadConversations();
     });
 
+    _remoteCommandSubscription =
+        service.commandStream.listen((command) async {
+      if (!command.isDeleteConversation) return;
+      await _storageService?.deleteMessagesForConversation(
+        command.conversationId,
+        deletedAt: command.createdAt,
+      );
+      if (!mounted) return;
+      await _reloadConversations();
+      _showSnackBar('O conversație a fost ștearsă de la distanță.');
+    });
+
     await service.start();
   }
 
@@ -724,6 +739,8 @@ class _SecureChatRootState extends State<SecureChatRoot>
     _statusSubscription = null;
     await _incomingMessageSubscription?.cancel();
     _incomingMessageSubscription = null;
+    await _remoteCommandSubscription?.cancel();
+    _remoteCommandSubscription = null;
     await _connectionService?.dispose();
     _connectionService = null;
 
@@ -1271,6 +1288,7 @@ class _SecureChatRootState extends State<SecureChatRoot>
     WidgetsBinding.instance.removeObserver(this);
     _statusSubscription?.cancel();
     _incomingMessageSubscription?.cancel();
+    _remoteCommandSubscription?.cancel();
     unawaited(_connectionService?.dispose());
     unawaited(_storageService?.close());
     super.dispose();

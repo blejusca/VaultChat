@@ -1,12 +1,50 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/message_model.dart';
 import '../services/conversation_storage_service.dart';
 import '../services/nostr_connection_service.dart';
 import '../theme/secure_chat_theme.dart';
 import '../widgets/message_bubble.dart';
+
+// Optiunile de autodistrugere
+enum TtlOption {
+  never,
+  oneHour,
+  twelveHours,
+  oneDay,
+  sevenDays,
+  thirtyDays,
+}
+
+extension TtlOptionExtension on TtlOption {
+  String get label {
+    switch (this) {
+      case TtlOption.never:       return 'Niciodată';
+      case TtlOption.oneHour:     return '1 oră';
+      case TtlOption.twelveHours: return '12 ore';
+      case TtlOption.oneDay:      return '24 ore';
+      case TtlOption.sevenDays:   return '7 zile';
+      case TtlOption.thirtyDays:  return '30 zile';
+    }
+  }
+
+  Duration? get duration {
+    switch (this) {
+      case TtlOption.never:       return null;
+      case TtlOption.oneHour:     return const Duration(hours: 1);
+      case TtlOption.twelveHours: return const Duration(hours: 12);
+      case TtlOption.oneDay:      return const Duration(hours: 24);
+      case TtlOption.sevenDays:   return const Duration(days: 7);
+      case TtlOption.thirtyDays:  return const Duration(days: 30);
+    }
+  }
+
+  // Cheia pentru SharedPreferences
+  String get prefKey => 'ttl_${name}';
+}
 
 class ChatScreen extends StatefulWidget {
   final String myPublicKey;
@@ -35,10 +73,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final List<MessageModel> _messages = <MessageModel>[];
 
   StreamSubscription<MessageModel>? _messageSubscription;
+  StreamSubscription<RemoteConversationCommand>? _commandSubscription;
   StreamSubscription<SecureChatConnectionSnapshot>? _statusSubscription;
+  Timer? _expiryTimer;
 
   bool _isLoading = true;
   bool _isSending = false;
+
+  // TTL selectat pentru aceasta conversatie
+  TtlOption _selectedTtl = TtlOption.never;
+
+  // Cheia SharedPreferences pentru TTL-ul acestei conversatii
+  late String _ttlPrefKey;
 
   late SecureChatConnectionSnapshot _connectionSnapshot;
   late String _conversationId;
@@ -53,6 +99,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       widget.recipientPublicKey,
     );
 
+    _ttlPrefKey = 'ttl_conv_$_conversationId';
+
     _connectionSnapshot = widget.connectionService.currentStatus;
 
     _statusSubscription = widget.connectionService.statusStream.listen((status) {
@@ -64,7 +112,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _handleIncomingMessage,
     );
 
+    _commandSubscription = widget.connectionService.commandStream.listen(
+      _handleRemoteCommand,
+    );
+
+    _loadTtlPreference();
     _loadMessages();
+    _startExpiryTimer();
   }
 
   @override
@@ -79,6 +133,303 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       unawaited(_loadMessages());
     }
   }
+
+  // ─── TTL ──────────────────────────────────────────────────────────────────
+
+  Future<void> _loadTtlPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_ttlPrefKey);
+    if (!mounted) return;
+    setState(() {
+      _selectedTtl = TtlOption.values.firstWhere(
+        (o) => o.name == saved,
+        orElse: () => TtlOption.never,
+      );
+    });
+  }
+
+  Future<void> _saveTtlPreference(TtlOption option) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_ttlPrefKey, option.name);
+  }
+
+  void _startExpiryTimer() {
+    // Verifica mesajele expirate la fiecare 60 secunde
+    _expiryTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      _purgeExpiredMessages();
+    });
+  }
+
+  Future<void> _purgeExpiredMessages() async {
+    final deleted = await widget.storageService.deleteExpiredMessages();
+    if (deleted > 0 && mounted) {
+      await _loadMessages();
+      await widget.onConversationChanged();
+    }
+  }
+
+  void _showTtlPicker() {
+    showModalBottomSheet<TtlOption>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: SecureChatColors.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(SecureChatRadius.xl),
+        ),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: SingleChildScrollView(
+  padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Handle
+                Center(
+                  child: Container(
+                    width: 38,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: SecureChatColors.borderSoft,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Row(
+                  children: [
+                    Icon(Icons.timer_outlined, color: SecureChatColors.violetSoft, size: 22),
+                    SizedBox(width: 10),
+                    Text(
+                      'Autodistrugere mesaje',
+                      style: TextStyle(
+                        color: SecureChatColors.text,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Mesajele se vor sterge local dupa intervalul ales.',
+                  style: TextStyle(
+                    color: SecureChatColors.mutedText,
+                    fontSize: 12.5,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                ...TtlOption.values.map((option) {
+                  final isSelected = option == _selectedTtl;
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(SecureChatRadius.md),
+                    onTap: () => Navigator.pop(ctx, option),
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? SecureChatColors.violet.withOpacity(0.18)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(SecureChatRadius.md),
+                        border: Border.all(
+                          color: isSelected
+                              ? SecureChatColors.violet.withOpacity(0.55)
+                              : Colors.transparent,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            option == TtlOption.never
+                                ? Icons.timer_off_outlined
+                                : Icons.timer_outlined,
+                            color: isSelected
+                                ? SecureChatColors.violetBright
+                                : SecureChatColors.mutedText,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            option.label,
+                            style: TextStyle(
+                              color: isSelected
+                                  ? SecureChatColors.violetBright
+                                  : SecureChatColors.text,
+                              fontSize: 15,
+                              fontWeight: isSelected
+                                  ? FontWeight.w700
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (isSelected)
+                            const Icon(
+                              Icons.check_rounded,
+                              color: SecureChatColors.violetBright,
+                              size: 20,
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+                const SizedBox(height: 10),
+                Divider(
+                  height: 24,
+                  color: SecureChatColors.borderSoft.withOpacity(0.65),
+                ),
+                InkWell(
+                  borderRadius: BorderRadius.circular(SecureChatRadius.md),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    Future.microtask(_confirmDeleteAllMessages);
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 14,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(SecureChatRadius.md),
+                      border: Border.all(
+                        color: SecureChatColors.danger.withOpacity(0.42),
+                      ),
+                      color: SecureChatColors.danger.withOpacity(0.08),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(
+                          Icons.delete_outline_rounded,
+                          color: SecureChatColors.danger,
+                          size: 21,
+                        ),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Șterge toate mesajele acum',
+                            style: TextStyle(
+                              color: SecureChatColors.danger,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
+          ),
+        );
+      },
+    ).then((chosen) async {
+      if (chosen == null || !mounted) return;
+      setState(() => _selectedTtl = chosen);
+      await _saveTtlPreference(chosen);
+
+      final label = chosen == TtlOption.never
+          ? 'Autodistrugere dezactivata.'
+          : 'Mesajele noi se vor sterge dupa ${chosen.label}.';
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(label),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    });
+  }
+
+
+  Future<void> _confirmDeleteAllMessages() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: SecureChatColors.card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(SecureChatRadius.xl),
+        ),
+        title: const Text(
+          'Șterge toate mesajele?',
+          style: TextStyle(
+            color: SecureChatColors.text,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: const Text(
+          'Ești sigur că vrei să ștergi toate mesajele din această conversație?\n\n'
+          'Acțiunea este ireversibilă.',
+          style: TextStyle(
+            color: SecureChatColors.mutedText,
+            height: 1.35,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Anulează'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: SecureChatColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Șterge tot'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await widget.connectionService.publishDeleteConversationCommand(
+        recipientPublicKey: widget.recipientPublicKey,
+        conversationId: _conversationId,
+      );
+    } catch (_) {
+      // Daca nu se poate trimite comanda remote, continuam stergerea locala.
+      // Utilizatorul poate incerca din nou dupa reconnect.
+    }
+
+    final deleted = await widget.storageService.deleteMessagesForConversation(
+      _conversationId,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _messages.clear();
+    });
+
+    await widget.onConversationChanged();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          deleted == 0
+              ? 'Nu existau mesaje de șters.'
+              : 'Toate mesajele din conversație au fost șterse.',
+        ),
+        backgroundColor: SecureChatColors.danger,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  // ─── Mesaje ────────────────────────────────────────────────────────────────
 
   Future<void> _loadMessages() async {
     final messages = await widget.storageService.loadConversation(_conversationId);
@@ -96,11 +447,47 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _handleIncomingMessage(MessageModel message) async {
-    if (message.conversationId != _conversationId) return;
+    if (message.conversationId.trim().toLowerCase() !=
+        _conversationId.trim().toLowerCase()) {
+      return;
+    }
+
+    // Important: si UI-ul trebuie sa respecte tombstone-ul local.
+    // Altfel mesajele vechi replay-uite de relay pot reaparea vizual,
+    // chiar daca storage-ul refuza sa le mai salveze.
+    if (!widget.storageService.shouldAcceptMessage(message)) return;
 
     if (!mounted) return;
     setState(() => _insertOrReplaceMessage(message));
     _scrollToBottom();
+  }
+
+  Future<void> _handleRemoteCommand(RemoteConversationCommand command) async {
+    if (!command.isDeleteConversation) return;
+    if (command.conversationId.trim().toLowerCase() !=
+        _conversationId.trim().toLowerCase()) {
+      return;
+    }
+
+    await widget.storageService.deleteMessagesForConversation(
+      _conversationId,
+      deletedAt: command.createdAt,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _messages.clear();
+    });
+
+    await widget.onConversationChanged();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Conversația a fost ștearsă de celălalt utilizator.'),
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _sendMessage() async {
@@ -113,10 +500,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     setState(() => _isSending = true);
 
     try {
+      final duration = _selectedTtl.duration;
       final result = await widget.connectionService.publishDirectMessage(
         recipientPublicKey: widget.recipientPublicKey,
         plainText: text,
+        ttlSeconds: duration?.inSeconds,
       );
+
+      // Calculeaza expiresAt bazat pe TTL selectat si il sincronizeaza cu payload-ul criptat.
+      final expiresAt = duration != null ? result.createdAt.add(duration) : null;
 
       final outgoingMessage = MessageModel(
         id: result.eventId,
@@ -129,6 +521,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         peerPublicKey: widget.recipientPublicKey,
         createdAt: result.createdAt,
         isFromRelay: false,
+        expiresAt: expiresAt,
       );
 
       await widget.storageService.saveMessage(outgoingMessage);
@@ -228,7 +621,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _messageSubscription?.cancel();
+    _commandSubscription?.cancel();
     _statusSubscription?.cancel();
+    _expiryTimer?.cancel();
     _messageController.dispose();
     _listScrollController.dispose();
     super.dispose();
@@ -253,10 +648,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 peerLabel: _peerLabel,
                 connectionLabel: _connectionSnapshot.label,
                 statusColor: _statusColor(),
+                selectedTtl: _selectedTtl,
                 onReconnect: () => widget.connectionService.reconnect(
                   reason: 'Manual',
                   force: true,
                 ),
+                onTtlTap: _showTtlPicker,
               ),
               Expanded(
                 child: _isLoading
@@ -269,7 +666,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                             itemCount: _messages.length + 1,
                             itemBuilder: (context, index) {
                               if (index == 0) {
-                                return const _EncryptedNotice();
+                                return _EncryptedNotice(ttl: _selectedTtl);
                               }
                               return MessageBubble(message: _messages[index - 1]);
                             },
@@ -278,7 +675,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               _Composer(
                 controller: _messageController,
                 isSending: _isSending,
+                selectedTtl: _selectedTtl,
                 onSend: _sendMessage,
+                onTtlTap: _showTtlPicker,
               ),
             ],
           ),
@@ -288,17 +687,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 }
 
+// ─── HEADER ──────────────────────────────────────────────────────────────────
+
 class _ChatHeader extends StatelessWidget {
   final String peerLabel;
   final String connectionLabel;
   final Color statusColor;
+  final TtlOption selectedTtl;
   final VoidCallback onReconnect;
+  final VoidCallback onTtlTap;
 
   const _ChatHeader({
     required this.peerLabel,
     required this.connectionLabel,
     required this.statusColor,
+    required this.selectedTtl,
     required this.onReconnect,
+    required this.onTtlTap,
   });
 
   @override
@@ -377,6 +782,19 @@ class _ChatHeader extends StatelessWidget {
               ],
             ),
           ),
+          // Buton TTL in header
+          IconButton(
+            icon: Icon(
+              selectedTtl == TtlOption.never
+                  ? Icons.timer_off_outlined
+                  : Icons.timer_outlined,
+              color: selectedTtl == TtlOption.never
+                  ? SecureChatColors.mutedText
+                  : SecureChatColors.violetBright,
+            ),
+            tooltip: 'Autodistrugere: ${selectedTtl.label}',
+            onPressed: onTtlTap,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Reconecteaza manual',
@@ -388,11 +806,16 @@ class _ChatHeader extends StatelessWidget {
   }
 }
 
+// ─── NOTICE CRIPTARE + TTL ────────────────────────────────────────────────────
+
 class _EncryptedNotice extends StatelessWidget {
-  const _EncryptedNotice();
+  final TtlOption ttl;
+  const _EncryptedNotice({required this.ttl});
 
   @override
   Widget build(BuildContext context) {
+    final hasTtl = ttl != TtlOption.never;
+
     return Center(
       child: Container(
         margin: const EdgeInsets.only(bottom: 16),
@@ -402,17 +825,41 @@ class _EncryptedNotice extends StatelessWidget {
           borderRadius: BorderRadius.circular(SecureChatRadius.md),
           border: Border.all(color: SecureChatColors.borderSoft.withOpacity(0.62)),
         ),
-        child: const Row(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_outline_rounded, size: 17, color: SecureChatColors.turquoise),
-            SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                'Mesajele sunt criptate end-to-end.',
-                style: TextStyle(color: SecureChatColors.mutedText, fontSize: 12.5),
-              ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.lock_outline_rounded, size: 17, color: SecureChatColors.turquoise),
+                const SizedBox(width: 8),
+                const Flexible(
+                  child: Text(
+                    'Mesajele sunt criptate end-to-end.',
+                    style: TextStyle(color: SecureChatColors.mutedText, fontSize: 12.5),
+                  ),
+                ),
+              ],
             ),
+            if (hasTtl) ...[
+              const SizedBox(height: 4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.timer_outlined, size: 15, color: SecureChatColors.violetSoft),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'Autodistrugere activă: ${ttl.label}',
+                      style: const TextStyle(
+                        color: SecureChatColors.violetSoft,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -420,19 +867,27 @@ class _EncryptedNotice extends StatelessWidget {
   }
 }
 
+// ─── COMPOSER ────────────────────────────────────────────────────────────────
+
 class _Composer extends StatelessWidget {
   final TextEditingController controller;
   final bool isSending;
+  final TtlOption selectedTtl;
   final VoidCallback onSend;
+  final VoidCallback onTtlTap;
 
   const _Composer({
     required this.controller,
     required this.isSending,
+    required this.selectedTtl,
     required this.onSend,
+    required this.onTtlTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final hasTtl = selectedTtl != TtlOption.never;
+
     return SafeArea(
       top: false,
       child: Padding(
@@ -447,7 +902,20 @@ class _Composer extends StatelessWidget {
           ),
           child: Row(
             children: [
-              const Icon(Icons.lock_outline_rounded, color: SecureChatColors.turquoise, size: 22),
+              // Buton timer
+              GestureDetector(
+                onTap: onTtlTap,
+                child: Tooltip(
+                  message: 'Autodistrugere: ${selectedTtl.label}',
+                  child: Icon(
+                    hasTtl ? Icons.timer_outlined : Icons.timer_off_outlined,
+                    color: hasTtl
+                        ? SecureChatColors.violetBright
+                        : SecureChatColors.turquoise,
+                    size: 22,
+                  ),
+                ),
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: TextField(
@@ -496,6 +964,8 @@ class _Composer extends StatelessWidget {
     );
   }
 }
+
+// ─── EMPTY CHAT ───────────────────────────────────────────────────────────────
 
 class _EmptyChat extends StatelessWidget {
   final String peerLabel;
