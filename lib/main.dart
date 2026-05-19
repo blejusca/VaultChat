@@ -317,6 +317,97 @@ class _PinGateState extends State<PinGate> {
     );
   }
 
+
+  Future<void> _confirmForgotPinWipe() async {
+    if (!mounted || _isBusy) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        scrollable: true,
+        icon: const Icon(Icons.warning_amber_rounded, color: SecureChatColors.danger, size: 36),
+        title: const Text('Resetezi VaultChat?'),
+        content: const Text(
+          'Daca ai uitat PIN-ul, singura metoda sigura este stergerea completa a datelor locale.\n\n'
+          'Se vor sterge de pe acest telefon:\n'
+          '• PIN-ul actual;\n'
+          '• cheia privata locala;\n'
+          '• mesajele si conversatiile locale;\n'
+          '• contactele locale.\n\n'
+          'Aceasta actiune este ireversibila. Poti recupera identitatea doar daca ai exportat cheia privata anterior.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Anuleaza'),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: SecureChatColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.delete_forever_rounded),
+            label: const Text('Sterge si reseteaza'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _isBusy = true;
+      _errorMessage = '';
+    });
+
+    try {
+      await _pinService.wipeAllApplicationData();
+
+      if (!mounted) return;
+      setState(() {
+        _hasPin = false;
+        _isBusy = false;
+        _failedAttempts = 0;
+        _enteredPin = '';
+        _newPin = '';
+        _confirmPin = '';
+        _isConfirmingNewPin = false;
+        _wasWiped = true;
+        _isBiometricAvailable = false;
+        _isBiometricAuthenticating = false;
+        _didAutoPromptBiometric = false;
+        _errorMessage = '';
+      });
+
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          scrollable: true,
+          icon: const Icon(Icons.lock_reset_rounded, color: SecureChatColors.violetSoft, size: 34),
+          title: const Text('Vault resetat'),
+          content: const Text(
+            'Datele locale au fost sterse. Creeaza un PIN nou pentru a folosi aplicatia.\n\n'
+            'Daca vrei sa revii la identitatea veche, restaureaza cheia privata din backup dupa ce intri in aplicatie.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _errorMessage = 'Nu am putut reseta VaultChat: $e';
+      });
+    }
+  }
+
   void _openVaultChatRoot() {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(builder: (_) => const VaultChatRoot()),
@@ -375,6 +466,8 @@ class _PinGateState extends State<PinGate> {
             showBiometricButton: _hasPin && _isBiometricAvailable,
             isBiometricAuthenticating: _isBiometricAuthenticating,
             onBiometricUnlock: () => _tryBiometricUnlock(),
+            showForgotPinButton: _hasPin,
+            onForgotPin: _confirmForgotPinWipe,
             onDigit: _handleDigit,
             onDelete: _handleDelete,
           ),
@@ -396,6 +489,8 @@ class _PinEntryScreen extends StatelessWidget {
   final bool showBiometricButton;
   final bool isBiometricAuthenticating;
   final VoidCallback onBiometricUnlock;
+  final bool showForgotPinButton;
+  final VoidCallback onForgotPin;
   final void Function(String digit) onDigit;
   final VoidCallback onDelete;
 
@@ -411,6 +506,8 @@ class _PinEntryScreen extends StatelessWidget {
     required this.showBiometricButton,
     required this.isBiometricAuthenticating,
     required this.onBiometricUnlock,
+    required this.showForgotPinButton,
+    required this.onForgotPin,
     required this.onDigit,
     required this.onDelete,
   });
@@ -524,6 +621,17 @@ class _PinEntryScreen extends StatelessWidget {
                         side: BorderSide(
                           color: SecureChatColors.violetBright.withOpacity(0.55),
                         ),
+                      ),
+                    ),
+                  ],
+                  if (showForgotPinButton) ...[
+                    const SizedBox(height: 8),
+                    TextButton.icon(
+                      onPressed: isBusy ? null : onForgotPin,
+                      icon: const Icon(Icons.lock_reset_rounded, size: 18),
+                      label: const Text('Am uitat PIN-ul'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: SecureChatColors.mutedText,
                       ),
                     ),
                   ],
