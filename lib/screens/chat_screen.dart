@@ -53,6 +53,7 @@ class ChatScreen extends StatefulWidget {
   final NostrConnectionService connectionService;
   final String? contactLabel;
   final Future<void> Function() onConversationChanged;
+  final Future<void> Function(String peerPublicKey)? onConversationDeleted;
 
   const ChatScreen({
     super.key,
@@ -62,6 +63,7 @@ class ChatScreen extends StatefulWidget {
     required this.connectionService,
     this.contactLabel,
     required this.onConversationChanged,
+    this.onConversationDeleted,
   });
 
   @override
@@ -81,6 +83,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   bool _isLoading = true;
   bool _isSending = false;
+  bool _isConversationClosed = false;
 
   // TTL selectat pentru aceasta conversatie
   TtlOption _selectedTtl = TtlOption.never;
@@ -158,9 +161,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _startExpiryTimer() {
-    // Verifica mesajele expirate la fiecare 60 secunde
-    _expiryTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      _purgeExpiredMessages();
+    _expiryTimer?.cancel();
+    // TTL trebuie verificat si cand utilizatorul ramane in chat, nu doar la reconnect.
+    _expiryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      unawaited(_purgeExpiredMessages());
     });
   }
 
@@ -409,27 +413,50 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       // Utilizatorul poate incerca din nou dupa reconnect.
     }
 
-    final deleted = await widget.storageService.deleteMessagesForConversation(
+    final deleted = await widget.storageService.deleteConversationCompletely(
       _conversationId,
     );
 
-    if (!mounted) return;
+    await _closeDeletedConversation(
+      snackMessage: deleted == 0
+          ? 'Conversația a fost ștearsă.'
+          : 'Conversația a fost ștearsă complet.',
+      isRemoteDelete: false,
+    );
+  }
 
-    if (mounted) setState(() {
-      _messages.clear();
-    });
+  Future<void> _closeDeletedConversation({
+    required String snackMessage,
+    required bool isRemoteDelete,
+  }) async {
+    if (_isConversationClosed) return;
+    _isConversationClosed = true;
 
+    _expiryTimer?.cancel();
+    await _messageSubscription?.cancel();
+    await _commandSubscription?.cancel();
+
+    if (mounted) {
+      setState(() {
+        _messages.clear();
+        _messageController.clear();
+        _isSending = false;
+      });
+    }
+
+    await widget.onConversationDeleted?.call(widget.recipientPublicKey);
     await widget.onConversationChanged();
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+
+    navigator.pop();
+
+    messenger.showSnackBar(
       SnackBar(
-        content: Text(
-          deleted == 0
-              ? 'Nu existau mesaje de șters.'
-              : 'Toate mesajele din conversație au fost șterse.',
-        ),
-        backgroundColor: SecureChatColors.danger,
+        content: Text(snackMessage),
+        backgroundColor: isRemoteDelete ? null : SecureChatColors.danger,
         duration: const Duration(seconds: 2),
       ),
     );
@@ -475,28 +502,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       return;
     }
 
-    await widget.storageService.deleteMessagesForConversation(
+    await widget.storageService.deleteConversationCompletely(
       _conversationId,
       deletedAt: command.createdAt,
     );
 
-    if (!mounted) return;
-    if (mounted) setState(() {
-      _messages.clear();
-    });
-
-    await widget.onConversationChanged();
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Conversația a fost ștearsă de celălalt utilizator.'),
-        duration: Duration(seconds: 2),
-      ),
+    await _closeDeletedConversation(
+      snackMessage: 'Conversația a fost ștearsă de celălalt utilizator.',
+      isRemoteDelete: true,
     );
   }
 
   Future<void> _sendMessage() async {
+    if (_isConversationClosed) return;
     if (_isSending) return;
 
     final text = _messageController.text.trim();
@@ -619,10 +637,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   String get _peerLabel {
     final label = widget.contactLabel?.trim();
     if (label != null && label.isNotEmpty) return label;
-    if (widget.recipientPublicKey.length >= 8) {
-      return widget.recipientPublicKey.substring(0, 8);
-    }
-    return widget.recipientPublicKey;
+    return 'Contact necunoscut';
   }
 
   @override
@@ -688,7 +703,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 controller: _messageController,
                 isSending: _isSending,
                 selectedTtl: _selectedTtl,
-                onSend: _sendMessage,
+                onSend: _isConversationClosed ? () {} : _sendMessage,
                 onTtlTap: _showTtlPicker,
               ),
             ],
@@ -986,40 +1001,62 @@ class _EmptyChat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: SecureChatColors.cardAlt.withOpacity(0.76),
-            borderRadius: BorderRadius.circular(SecureChatRadius.xl),
-            border: Border.all(color: SecureChatColors.borderSoft.withOpacity(0.62)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.lock_outline_rounded, size: 48, color: SecureChatColors.violetBright),
-              const SizedBox(height: 12),
-              Text(
-                'Conversație criptată cu $peerLabel',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: SecureChatColors.text,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Center(
+              child: Container(
+                width: double.infinity,
+                constraints: const BoxConstraints(maxWidth: 430),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+                decoration: BoxDecoration(
+                  color: SecureChatColors.cardAlt.withOpacity(0.76),
+                  borderRadius: BorderRadius.circular(SecureChatRadius.xl),
+                  border: Border.all(
+                    color: SecureChatColors.borderSoft.withOpacity(0.62),
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.lock_outline_rounded,
+                      size: 40,
+                      color: SecureChatColors.violetBright,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Conversație criptată cu $peerLabel',
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: SecureChatColors.text,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Mesajele sunt salvate local pe acest telefon.',
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: SecureChatColors.mutedText,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 6),
-              const Text(
-                'Mesajele vor fi salvate local pe acest telefon.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: SecureChatColors.mutedText, fontSize: 13),
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

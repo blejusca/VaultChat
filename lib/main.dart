@@ -945,23 +945,30 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
     _incomingMessageSubscription =
         service.messageStream.listen((message) async {
-      await _storageService?.deleteExpiredMessages();
+      await _purgeExpiredMessagesAndReload(forceReload: false);
       await _storageService?.saveMessage(message);
-      await _storageService?.deleteExpiredMessages();
       if (!mounted) return;
-      await _reloadConversations();
+      await _purgeExpiredMessagesAndReload(forceReload: true);
     });
 
     _remoteCommandSubscription =
         service.commandStream.listen((command) async {
       if (!command.isDeleteConversation) return;
-      await _storageService?.deleteMessagesForConversation(
+      await _storageService?.deleteConversationCompletely(
         command.conversationId,
         deletedAt: command.createdAt,
       );
+      await _contactService?.deleteContact(command.senderPublicKey);
       if (!mounted) return;
       await _reloadConversations();
-      _showSnackBar('O conversație a fost ștearsă de la distanță.');
+
+      final ageSeconds = DateTime.now()
+          .difference(command.createdAt)
+          .inSeconds;
+
+      if (ageSeconds <= 8) {
+        _showSnackBar('O conversație a fost ștearsă de la distanță.');
+      }
     });
 
     await service.start();
@@ -1010,19 +1017,19 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
   void _startGlobalExpiryTimer() {
     _globalExpiryTimer?.cancel();
-    _globalExpiryTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+    _globalExpiryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       unawaited(_purgeExpiredMessagesAndReload());
     });
   }
 
-  Future<void> _purgeExpiredMessagesAndReload() async {
+  Future<void> _purgeExpiredMessagesAndReload({bool forceReload = false}) async {
     final storage = _storageService;
     if (storage == null) return;
 
     final deleted = await storage.deleteExpiredMessages();
     if (!mounted) return;
 
-    if (deleted > 0) {
+    if (deleted > 0 || forceReload) {
       await _reloadConversations();
     }
   }
@@ -1060,6 +1067,17 @@ class _VaultChatRootState extends State<VaultChatRoot>
     final prefs = await SharedPreferences.getInstance();
     final normalizedRecipient =
         _extractPublicKey(recipientPublicKey) ?? recipientPublicKey.trim().toLowerCase();
+
+    if (!_isValidPublicKey(normalizedRecipient)) {
+      _showSnackBar('ID public invalid. Trebuie să aibă 64 caractere hex.', isError: true);
+      return;
+    }
+
+    if (normalizedRecipient == keyPair.public.trim().toLowerCase()) {
+      _showSnackBar('Nu poți deschide o conversație cu propriul ID.', isError: true);
+      return;
+    }
+
     await prefs.setString(_lastRecipientStorageKey, normalizedRecipient);
 
     final storedContactLabel =
@@ -1085,6 +1103,10 @@ class _VaultChatRootState extends State<VaultChatRoot>
           connectionService: connection,
           contactLabel: contactLabel,
           onConversationChanged: _reloadConversations,
+          onConversationDeleted: (peerPublicKey) async {
+            await _contactService?.deleteContact(peerPublicKey);
+            await _reloadConversations();
+          },
         ),
       ),
     );
@@ -1132,12 +1154,17 @@ class _VaultChatRootState extends State<VaultChatRoot>
       return;
     }
 
+    final keyPair = _keyPair;
+    if (keyPair != null && publicKey == keyPair.public.trim().toLowerCase()) {
+      _showSnackBar('Nu poți crea conversație cu propriul ID.', isError: true);
+      return;
+    }
+
     final name = result.displayName.trim();
     if (name.isNotEmpty) {
       await _contactService?.upsertContact(publicKey: publicKey, displayName: name);
     }
 
-    final keyPair = _keyPair;
     final storage = _storageService;
     if (keyPair != null && storage != null) {
       await storage.ensureConversationExists(
@@ -1174,6 +1201,12 @@ class _VaultChatRootState extends State<VaultChatRoot>
       return;
     }
 
+    final keyPair = _keyPair;
+    if (keyPair != null && publicKey == keyPair.public.trim().toLowerCase()) {
+      _showSnackBar('Nu poți salva propriul ID ca destinatar.', isError: true);
+      return;
+    }
+
     final name = result.displayName.trim();
     if (name.isEmpty) {
       _showSnackBar('Introdu un nume pentru contact.', isError: true);
@@ -1182,7 +1215,6 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
     await _contactService?.upsertContact(publicKey: publicKey, displayName: name);
 
-    final keyPair = _keyPair;
     final storage = _storageService;
     if (keyPair != null && storage != null) {
       await storage.ensureConversationExists(

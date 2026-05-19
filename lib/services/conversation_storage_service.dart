@@ -21,6 +21,41 @@ class ConversationStorageService {
   final Box _conversationsBox;
   final Box _deletedConversationsBox;
 
+  static const String unknownContactLabel = 'Contact necunoscut';
+
+  bool _looksLikeTechnicalLabel(String value, String peerPublicKey) {
+    final clean = value.trim().toLowerCase();
+    final peer = _normalizePublicKey(peerPublicKey);
+    if (clean.isEmpty) return true;
+    if (clean == unknownContactLabel.toLowerCase()) return true;
+    if (clean == 'eu') return true;
+    if (clean == peer) return true;
+    if (peer.length >= 8 && clean == peer.substring(0, 8)) return true;
+    if (RegExp(r'^[0-9a-f]{8}$').hasMatch(clean)) return true;
+    if (RegExp(r'^[0-9a-f]{64}$').hasMatch(clean)) return true;
+    return false;
+  }
+
+  String _cleanPeerLabel({
+    required String? proposed,
+    required String? existing,
+    required String peerPublicKey,
+  }) {
+    final existingClean = existing?.trim() ?? '';
+    if (existingClean.isNotEmpty &&
+        !_looksLikeTechnicalLabel(existingClean, peerPublicKey)) {
+      return existingClean;
+    }
+
+    final proposedClean = proposed?.trim() ?? '';
+    if (proposedClean.isNotEmpty &&
+        !_looksLikeTechnicalLabel(proposedClean, peerPublicKey)) {
+      return proposedClean;
+    }
+
+    return unknownContactLabel;
+  }
+
   static Future<void> deleteAllLocalData() async {
     await Hive.initFlutter();
 
@@ -64,6 +99,30 @@ class ConversationStorageService {
 
   String _normalizeConversationId(String conversationId) {
     return conversationId.trim().toLowerCase();
+  }
+
+  String _normalizePublicKey(String publicKey) {
+    return publicKey.trim().toLowerCase();
+  }
+
+  bool _looksLikePublicKey(String value) {
+    final clean = _normalizePublicKey(value);
+    return RegExp(r'^[0-9a-f]{64}$').hasMatch(clean);
+  }
+
+  String _canonicalConversationId(String myPublicKey, String peerPublicKey) {
+    final myKey = _normalizePublicKey(myPublicKey);
+    final peerKey = _normalizePublicKey(peerPublicKey);
+    if (!_looksLikePublicKey(myKey) || !_looksLikePublicKey(peerKey)) return '';
+    if (myKey == peerKey) return '';
+    return _normalizeConversationId(MessageModel.buildConversationId(myKey, peerKey));
+  }
+
+  String _canonicalConversationIdFromMessage(MessageModel message) {
+    return _canonicalConversationId(
+      message.senderPublicKey,
+      message.recipientPublicKey,
+    );
   }
 
   DateTime? _deletedAtForConversation(String conversationId) {
@@ -110,30 +169,26 @@ class ConversationStorageService {
     required String peerPublicKey,
     String? peerLabel,
   }) async {
-    final cleanMyKey = myPublicKey.trim().toLowerCase();
-    final cleanPeerKey = peerPublicKey.trim().toLowerCase();
-    if (cleanMyKey.isEmpty || cleanPeerKey.isEmpty) return;
-
-    final conversationId = _normalizeConversationId(
-      MessageModel.buildConversationId(cleanMyKey, cleanPeerKey),
-    );
+    final cleanMyKey = _normalizePublicKey(myPublicKey);
+    final cleanPeerKey = _normalizePublicKey(peerPublicKey);
+    final conversationId = _canonicalConversationId(cleanMyKey, cleanPeerKey);
     if (conversationId.isEmpty) return;
+
+    // Conversatia a fost recreata explicit de utilizator.
+    // Eliminam tombstone-ul pentru a preveni ghost-thread state
+    // si pentru a permite reconstruirea curata a conversatiei noi.
+    await _deletedConversationsBox.delete(conversationId);
 
     final existingRaw = _conversationsBox.get(conversationId);
     final existing = existingRaw is Map
         ? ConversationModel.fromMap(existingRaw)
         : null;
 
-    final shortLabel = cleanPeerKey.length >= 8
-        ? cleanPeerKey.substring(0, 8)
-        : cleanPeerKey;
-
-    final cleanLabel = peerLabel?.trim();
-    final effectiveLabel = cleanLabel != null && cleanLabel.isNotEmpty
-        ? cleanLabel
-        : (existing?.peerLabel.trim().isNotEmpty == true
-            ? existing!.peerLabel
-            : shortLabel);
+    final effectiveLabel = _cleanPeerLabel(
+      proposed: peerLabel,
+      existing: existing?.peerLabel,
+      peerPublicKey: cleanPeerKey,
+    );
 
     final conversation = ConversationModel(
       id: conversationId,
@@ -145,16 +200,24 @@ class ConversationStorageService {
       unreadCount: existing?.unreadCount ?? 0,
     );
 
+    // O singura intrare canonica per pereche de chei. Orice cheie veche/non-canonica
+    // este eliminata in sanitizeStorage().
     await _conversationsBox.put(conversationId, conversation.toMap());
   }
 
   Future<void> saveMessage(MessageModel message) async {
     if (message.id.trim().isEmpty) return;
     if (message.conversationId.trim().isEmpty) return;
-    if (!shouldAcceptMessage(message)) return;
+    var cleanMessage = message;
+    final canonicalId = _canonicalConversationIdFromMessage(message);
+    if (canonicalId.isEmpty) return;
+    if (_normalizeConversationId(message.conversationId) != canonicalId) {
+      cleanMessage = message.copyWith(conversationId: canonicalId);
+    }
+    if (!shouldAcceptMessage(cleanMessage)) return;
 
-    await _messagesBox.put(message.id, message.toMap());
-    await upsertConversationFromMessage(message);
+    await _messagesBox.put(cleanMessage.id, cleanMessage.toMap());
+    await upsertConversationFromMessage(cleanMessage);
   }
 
   Future<int> deleteExpiredMessages() async {
@@ -199,6 +262,21 @@ class ConversationStorageService {
     DateTime? deletedAt,
     bool markDeleted = true,
   }) async {
+    // Backwards-compatible wrapper: in VaultChat, deleting a conversation is a
+    // privacy wipe, not a simple "clear history" action.  Keep this method
+    // name for older callers, but route it through the hard-delete path.
+    return deleteConversationCompletely(
+      conversationId,
+      deletedAt: deletedAt,
+      markDeleted: markDeleted,
+    );
+  }
+
+  Future<int> deleteConversationCompletely(
+    String conversationId, {
+    DateTime? deletedAt,
+    bool markDeleted = true,
+  }) async {
     final normalizedConversationId = _normalizeConversationId(conversationId);
     if (normalizedConversationId.isEmpty) return 0;
 
@@ -216,10 +294,7 @@ class ConversationStorageService {
       final storedConversationId = _normalizeConversationId(
         (raw['conversationId'] ?? '').toString(),
       );
-      if (storedConversationId != normalizedConversationId) continue;
-
-      final createdAt = _createdAtFromRaw(raw);
-      if (createdAt == null || !createdAt.isAfter(cutoff)) {
+      if (storedConversationId == normalizedConversationId) {
         keysToDelete.add(key);
       }
     }
@@ -228,11 +303,17 @@ class ConversationStorageService {
       await _messagesBox.delete(key);
     }
 
+    // Remove every possible shell/mapping for this thread.  Do NOT rebuild here:
+    // rebuilding is exactly what caused "Contact necunoscut" ghost threads after
+    // delete and allowed the still-mounted ChatScreen to continue sending.
     await _conversationsBox.delete(normalizedConversationId);
     await _conversationsBox.delete(conversationId.trim());
-    await _rebuildOrRemoveConversation(normalizedConversationId);
 
     return keysToDelete.length;
+  }
+
+  Future<bool> isConversationDeleted(String conversationId) async {
+    return _deletedAtForConversation(conversationId) != null;
   }
 
   Future<void> deleteMessage(String messageId) async {
@@ -248,7 +329,10 @@ class ConversationStorageService {
   }
 
   Future<void> upsertConversationFromMessage(MessageModel message) async {
-    final conversationId = _normalizeConversationId(message.conversationId);
+    final canonicalId = _canonicalConversationIdFromMessage(message);
+    final conversationId = canonicalId.isNotEmpty
+        ? canonicalId
+        : _normalizeConversationId(message.conversationId);
     if (conversationId.isEmpty) return;
     if (message.isExpired) return;
     if (_isBlockedByTombstone(conversationId, message.createdAt)) return;
@@ -258,19 +342,11 @@ class ConversationStorageService {
         ? ConversationModel.fromMap(existingRaw)
         : null;
 
-    final shortLabel = message.peerPublicKey.length >= 8
-        ? message.peerPublicKey.substring(0, 8)
-        : message.peerPublicKey;
-
-    final incomingLabel = message.senderLabel.trim();
-    final existingLabel = existing?.peerLabel.trim() ?? '';
-    final existingIsShortKey = existingLabel == shortLabel ||
-        existingLabel == message.peerPublicKey ||
-        existingLabel.isEmpty;
-
-    final peerLabel = incomingLabel.isNotEmpty && existingIsShortKey
-        ? incomingLabel
-        : (existingLabel.isNotEmpty ? existingLabel : shortLabel);
+    final peerLabel = _cleanPeerLabel(
+      proposed: message.isMine ? null : message.senderLabel,
+      existing: existing?.peerLabel,
+      peerPublicKey: message.peerPublicKey,
+    );
 
     final conversation = ConversationModel(
       id: conversationId,
@@ -318,14 +394,14 @@ class ConversationStorageService {
     for (final raw in _messagesBox.values) {
       if (raw is! Map) continue;
       final message = MessageModel.fromMap(raw);
-      final conversationId = _normalizeConversationId(message.conversationId);
-      if (conversationId.isEmpty) continue;
+      final canonicalId = _canonicalConversationIdFromMessage(message);
+      if (canonicalId.isEmpty) continue;
       if (message.isExpired) continue;
-      if (_isBlockedByTombstone(conversationId, message.createdAt)) continue;
+      if (_isBlockedByTombstone(canonicalId, message.createdAt)) continue;
 
-      final existing = latestMessages[conversationId];
+      final existing = latestMessages[canonicalId];
       if (existing == null || message.createdAt.isAfter(existing.createdAt)) {
-        latestMessages[conversationId] = message;
+        latestMessages[canonicalId] = message.copyWith(conversationId: canonicalId);
       }
     }
 
@@ -336,33 +412,37 @@ class ConversationStorageService {
       if (raw is! Map) continue;
 
       final stored = ConversationModel.fromMap(raw);
-      final conversationId = _normalizeConversationId(
-        stored.id.isNotEmpty ? stored.id : key.toString(),
+      final canonicalId = _canonicalConversationId(
+        stored.myPublicKey,
+        stored.peerPublicKey,
       );
-      if (conversationId.isEmpty) continue;
-
-      final tombstone = _deletedAtForConversation(conversationId);
-      final latest = latestMessages[conversationId];
-
-      if (tombstone != null && latest == null) {
+      if (canonicalId.isEmpty) {
         await _conversationsBox.delete(key);
         continue;
       }
 
-      byId[conversationId] = stored.copyWith(id: conversationId);
+      final latest = latestMessages[canonicalId];
+      final hasUsableLocalShell = latest == null &&
+          stored.lastMessageText.trim().isEmpty &&
+          DateTime.now().difference(stored.updatedAt).inMinutes <= 10;
+
+      if (latest == null && !hasUsableLocalShell) {
+        await _conversationsBox.delete(key);
+        continue;
+      }
+
+      byId[canonicalId] = stored.copyWith(id: canonicalId);
     }
 
     for (final entry in latestMessages.entries) {
       final message = entry.value;
       final existing = byId[entry.key];
 
-      final shortLabel = message.peerPublicKey.length >= 8
-          ? message.peerPublicKey.substring(0, 8)
-          : message.peerPublicKey;
-
-      final peerLabel = existing?.peerLabel.trim().isNotEmpty == true
-          ? existing!.peerLabel
-          : shortLabel;
+      final peerLabel = _cleanPeerLabel(
+        proposed: message.isMine ? null : message.senderLabel,
+        existing: existing?.peerLabel,
+        peerPublicKey: message.peerPublicKey,
+      );
 
       final conversation = ConversationModel(
         id: entry.key,
@@ -381,7 +461,7 @@ class ConversationStorageService {
     }
 
     final conversations = byId.values
-        .where((c) => c.peerPublicKey.trim().isNotEmpty)
+        .where((c) => _looksLikePublicKey(c.peerPublicKey))
         .toList();
 
     conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
@@ -419,11 +499,28 @@ class ConversationStorageService {
         continue;
       }
 
+      final message = MessageModel.fromMap(raw);
+      final canonicalId = _canonicalConversationIdFromMessage(message);
+      if (canonicalId.isEmpty) {
+        messageKeysToDelete.add(key);
+        continue;
+      }
+
+      if (canonicalId != conversationId) {
+        await _messagesBox.put(
+          key,
+          message.copyWith(conversationId: canonicalId).toMap(),
+        );
+        affectedConversationIds
+          ..add(conversationId)
+          ..add(canonicalId);
+      }
+
       final expired = expiresAt != null && now.isAfter(expiresAt);
-      final tombstoned = _isBlockedByTombstone(conversationId, createdAt);
+      final tombstoned = _isBlockedByTombstone(canonicalId, createdAt);
       if (expired || tombstoned) {
         messageKeysToDelete.add(key);
-        affectedConversationIds.add(conversationId);
+        affectedConversationIds.add(canonicalId);
       }
     }
 
@@ -440,8 +537,53 @@ class ConversationStorageService {
       if (conversationId.isNotEmpty) conversationIds.add(conversationId);
     }
     conversationIds.addAll(affectedConversationIds);
+
+    final conversationKeysToDelete = <dynamic>[];
+    final canonicalConversations = <String, ConversationModel>{};
+
     for (final key in _conversationsBox.keys) {
-      conversationIds.add(_normalizeConversationId(key.toString()));
+      final raw = _conversationsBox.get(key);
+      if (raw is! Map) {
+        conversationKeysToDelete.add(key);
+        continue;
+      }
+
+      final stored = ConversationModel.fromMap(raw);
+      final canonicalId = _canonicalConversationId(
+        stored.myPublicKey,
+        stored.peerPublicKey,
+      );
+
+      if (canonicalId.isEmpty) {
+        conversationKeysToDelete.add(key);
+        continue;
+      }
+
+      conversationIds.add(canonicalId);
+      final previous = canonicalConversations[canonicalId];
+      if (previous == null || stored.updatedAt.isAfter(previous.updatedAt)) {
+        canonicalConversations[canonicalId] = stored.copyWith(
+          id: canonicalId,
+          peerLabel: _cleanPeerLabel(
+            proposed: stored.peerLabel,
+            existing: stored.peerLabel,
+            peerPublicKey: stored.peerPublicKey,
+          ),
+        );
+      }
+
+      if (_normalizeConversationId(key.toString()) != canonicalId ||
+          _normalizeConversationId(stored.id) != canonicalId) {
+        conversationKeysToDelete.add(key);
+      }
+    }
+
+    for (final key in conversationKeysToDelete) {
+      await _conversationsBox.delete(key);
+    }
+
+    for (final entry in canonicalConversations.entries) {
+      await _conversationsBox.put(entry.key, entry.value.toMap());
     }
 
     for (final conversationId in conversationIds) {
@@ -470,10 +612,26 @@ class ConversationStorageService {
       final raw = _conversationsBox.get(normalizedConversationId);
       if (raw is Map) {
         final existing = ConversationModel.fromMap(raw);
+        final canonicalId = _canonicalConversationId(
+          existing.myPublicKey,
+          existing.peerPublicKey,
+        );
+
+        if (canonicalId != normalizedConversationId ||
+            existing.lastMessageText.trim().isEmpty &&
+                DateTime.now().difference(existing.updatedAt).inMinutes > 10) {
+          await _conversationsBox.delete(normalizedConversationId);
+          return;
+        }
+
         final cleaned = existing.copyWith(
           id: normalizedConversationId,
+          peerLabel: _cleanPeerLabel(
+            proposed: existing.peerLabel,
+            existing: existing.peerLabel,
+            peerPublicKey: existing.peerPublicKey,
+          ),
           lastMessageText: '',
-          updatedAt: existing.updatedAt,
           unreadCount: 0,
         );
         await _conversationsBox.put(normalizedConversationId, cleaned.toMap());

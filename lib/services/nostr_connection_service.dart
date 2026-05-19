@@ -216,7 +216,7 @@ class NostrConnectionService {
         NostrFilter(
           kinds: [4],
           limit: 300,
-          since: DateTime.now().subtract(const Duration(days: 7)),
+          since: DateTime.now().subtract(const Duration(days: 31)),
         ),
       ],
     );
@@ -287,9 +287,7 @@ class NostrConnectionService {
         publicKey,
         peerPublicKey,
       );
-      final senderLabel = peerPublicKey.length >= 8
-          ? peerPublicKey.substring(0, 8)
-          : peerPublicKey;
+      const senderLabel = 'Contact necunoscut';
       final createdAt = _eventCreatedAt(event);
       final payload = _decodePayload(decrypted);
 
@@ -316,6 +314,10 @@ class NostrConnectionService {
       final expiresAt = payload.ttlSeconds != null && payload.ttlSeconds! > 0
           ? createdAt.add(Duration(seconds: payload.ttlSeconds!))
           : null;
+
+      if (expiresAt != null && !DateTime.now().isBefore(expiresAt)) {
+        return;
+      }
 
       if (!_messageController.isClosed) {
         _messageController.add(
@@ -561,6 +563,7 @@ class NostrConnectionService {
       'v': 1,
       'type': 'text',
       'text': text,
+      'createdAtMillis': DateTime.now().millisecondsSinceEpoch,
       if (ttlSeconds != null && ttlSeconds > 0) 'ttlSeconds': ttlSeconds,
     });
   }

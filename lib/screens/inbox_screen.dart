@@ -366,9 +366,9 @@ class _ConversationTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final peerLabel = conversation.peerLabel.isNotEmpty
-        ? conversation.peerLabel
-        : _shortKey(conversation.peerPublicKey);
+    final peerLabel = conversation.peerLabel.trim().isNotEmpty
+        ? conversation.peerLabel.trim()
+        : 'Contact necunoscut';
 
     return Material(
       color: Colors.transparent,
