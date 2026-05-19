@@ -100,7 +100,7 @@ class SecureChatGradients {
   static const LinearGradient primary = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [SecureChatColors.violetBright, SecureChatColors.violet],
+    colors: [Color(0xFF7568F2), Color(0xFF4F46E5)],
   );
 
   static const LinearGradient accent = LinearGradient(
@@ -191,7 +191,7 @@ class SecureChatTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: SecureChatColors.violet,
+          backgroundColor: Color(0xFF6658E8),
           foregroundColor: Colors.white,
           minimumSize: const Size(52, 52),
           disabledBackgroundColor: SecureChatColors.cardSoft,
@@ -219,7 +219,7 @@ class SecureChatTheme {
         ),
       ),
       floatingActionButtonTheme: const FloatingActionButtonThemeData(
-        backgroundColor: SecureChatColors.violet,
+        backgroundColor: Color(0xFF6658E8),
         foregroundColor: Colors.white,
         elevation: 4,
       ),
@@ -288,5 +288,37 @@ class SecureChatStatusColor {
       return SecureChatColors.danger;
     }
     return SecureChatColors.warning;
+  }
+}
+
+class SecureChatAvatar {
+  static int _hash(String seed) {
+    var hash = 0;
+    for (final codeUnit in seed.codeUnits) {
+      hash = 0x1fffffff & (hash + codeUnit);
+      hash = 0x1fffffff & (hash + ((0x0007ffff & hash) << 10));
+      hash ^= (hash >> 6);
+    }
+    hash = 0x1fffffff & (hash + ((0x03ffffff & hash) << 3));
+    hash ^= (hash >> 11);
+    hash = 0x1fffffff & (hash + ((0x00003fff & hash) << 15));
+    return hash.abs();
+  }
+
+  static LinearGradient gradientFor(String seed) {
+    final palettes = <List<Color>>[
+      [const Color(0xFF8B7CFF), const Color(0xFF00C2A8)],
+      [const Color(0xFF5E7CFF), const Color(0xFF31D0AA)],
+      [const Color(0xFF7C5CFF), const Color(0xFFFFB86B)],
+      [const Color(0xFF3B82F6), const Color(0xFF8B7CFF)],
+      [const Color(0xFF00C2A8), const Color(0xFF4F46E5)],
+      [const Color(0xFFB2A8FF), const Color(0xFF00A38F)],
+    ];
+    final selected = palettes[_hash(seed) % palettes.length];
+    return LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: selected,
+    );
   }
 }

@@ -251,7 +251,7 @@ class ConversationStorageService {
     }
 
     for (final id in affectedConversationIds) {
-      await _rebuildOrRemoveConversation(id);
+      await _rebuildOrRemoveConversation(id, preserveRecentEmptyShell: false);
     }
 
     return keysToDelete.length;
@@ -476,6 +476,33 @@ class ConversationStorageService {
     return messages.last.createdAt;
   }
 
+  Future<DateTime?> nextExpiryTimeForConversation(String conversationId) async {
+    final normalizedConversationId = _normalizeConversationId(conversationId);
+    if (normalizedConversationId.isEmpty) return null;
+
+    DateTime? nextExpiry;
+    final now = DateTime.now();
+
+    for (final raw in _messagesBox.values) {
+      if (raw is! Map) continue;
+
+      final storedConversationId = _normalizeConversationId(
+        (raw['conversationId'] ?? '').toString(),
+      );
+      if (storedConversationId != normalizedConversationId) continue;
+
+      final expiresAt = _expiresAtFromRaw(raw);
+      if (expiresAt == null) continue;
+      if (!expiresAt.isAfter(now)) continue;
+
+      if (nextExpiry == null || expiresAt.isBefore(nextExpiry)) {
+        nextExpiry = expiresAt;
+      }
+    }
+
+    return nextExpiry;
+  }
+
   Future<void> sanitizeStorage() async {
     final now = DateTime.now();
     final messageKeysToDelete = <dynamic>[];
@@ -603,7 +630,10 @@ class ConversationStorageService {
     await _deletedConversationsBox.close();
   }
 
-  Future<void> _rebuildOrRemoveConversation(String conversationId) async {
+  Future<void> _rebuildOrRemoveConversation(
+    String conversationId, {
+    bool preserveRecentEmptyShell = true,
+  }) async {
     final normalizedConversationId = _normalizeConversationId(conversationId);
     if (normalizedConversationId.isEmpty) return;
 
@@ -617,9 +647,12 @@ class ConversationStorageService {
           existing.peerPublicKey,
         );
 
-        if (canonicalId != normalizedConversationId ||
-            existing.lastMessageText.trim().isEmpty &&
-                DateTime.now().difference(existing.updatedAt).inMinutes > 10) {
+        final shouldRemoveEmptyShell = canonicalId != normalizedConversationId ||
+            !preserveRecentEmptyShell ||
+            (existing.lastMessageText.trim().isEmpty &&
+                DateTime.now().difference(existing.updatedAt).inMinutes > 10);
+
+        if (shouldRemoveEmptyShell) {
           await _conversationsBox.delete(normalizedConversationId);
           return;
         }

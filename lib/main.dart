@@ -14,6 +14,7 @@ import 'services/conversation_storage_service.dart';
 import 'services/contact_storage_service.dart';
 import 'services/nostr_connection_service.dart';
 import 'services/pin_lock_service.dart';
+import 'services/biometric_lock_service.dart';
 import 'theme/secure_chat_theme.dart';
 
 void main() {
@@ -44,12 +45,18 @@ class PinGate extends StatefulWidget {
 
 class _PinGateState extends State<PinGate> {
   final PinLockService _pinService = PinLockService();
+  final BiometricLockService _biometricService = BiometricLockService();
 
   bool _isLoading = true;
   bool _hasPin = false;
   bool _isConfirmingNewPin = false;
   bool _isBusy = false;
   bool _wasWiped = false;
+  bool _isBiometricAvailable = false;
+  bool _isBiometricAuthenticating = false;
+  bool _didAutoPromptBiometric = false;
+
+  String _biometricLabel = 'Deblocare biometrica';
 
   String _newPin = '';
   String _confirmPin = '';
@@ -67,13 +74,29 @@ class _PinGateState extends State<PinGate> {
     try {
       final hasPin = await _pinService.hasPin();
       final attempts = await _pinService.failedAttempts();
+      final biometricSupport = hasPin
+          ? await _biometricService.supportState()
+          : const BiometricSupportState(
+              isAvailable: false,
+              label: 'Deblocare biometrica',
+            );
 
       if (!mounted) return;
       if (mounted) setState(() {
         _hasPin = hasPin;
         _failedAttempts = attempts;
+        _isBiometricAvailable = biometricSupport.isAvailable;
+        _biometricLabel = biometricSupport.label;
         _isLoading = false;
       });
+
+      if (hasPin && biometricSupport.isAvailable) {
+        Future.delayed(const Duration(milliseconds: 350), () {
+          if (!mounted || _didAutoPromptBiometric) return;
+          _didAutoPromptBiometric = true;
+          unawaited(_tryBiometricUnlock(autoPrompt: true));
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       if (mounted) setState(() {
@@ -81,6 +104,35 @@ class _PinGateState extends State<PinGate> {
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _tryBiometricUnlock({bool autoPrompt = false}) async {
+    if (!_hasPin || !_isBiometricAvailable || _isBusy || _isBiometricAuthenticating) {
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isBiometricAuthenticating = true;
+        if (!autoPrompt) _errorMessage = '';
+      });
+    }
+
+    final success = await _biometricService.authenticate();
+
+    if (!mounted) return;
+
+    if (success) {
+      _openVaultChatRoot();
+      return;
+    }
+
+    setState(() {
+      _isBiometricAuthenticating = false;
+      if (!autoPrompt) {
+        _errorMessage = 'Deblocarea biometrica a fost anulata. Foloseste PIN-ul.';
+      }
+    });
   }
 
   void _handleDigit(String digit) {
@@ -319,6 +371,10 @@ class _PinGateState extends State<PinGate> {
             isBusy: _isBusy,
             showAttemptsWarning: _hasPin && _failedAttempts >= 5 && _errorMessage.isEmpty,
             attemptsLeft: attemptsLeft,
+            biometricLabel: _biometricLabel,
+            showBiometricButton: _hasPin && _isBiometricAvailable,
+            isBiometricAuthenticating: _isBiometricAuthenticating,
+            onBiometricUnlock: () => _tryBiometricUnlock(),
             onDigit: _handleDigit,
             onDelete: _handleDelete,
           ),
@@ -336,6 +392,10 @@ class _PinEntryScreen extends StatelessWidget {
   final bool isBusy;
   final bool showAttemptsWarning;
   final int attemptsLeft;
+  final String biometricLabel;
+  final bool showBiometricButton;
+  final bool isBiometricAuthenticating;
+  final VoidCallback onBiometricUnlock;
   final void Function(String digit) onDigit;
   final VoidCallback onDelete;
 
@@ -347,6 +407,10 @@ class _PinEntryScreen extends StatelessWidget {
     required this.isBusy,
     required this.showAttemptsWarning,
     required this.attemptsLeft,
+    required this.biometricLabel,
+    required this.showBiometricButton,
+    required this.isBiometricAuthenticating,
+    required this.onBiometricUnlock,
     required this.onDigit,
     required this.onDelete,
   });
@@ -434,6 +498,36 @@ class _PinEntryScreen extends StatelessWidget {
                         const SizedBox(height: 22),
                     ],
                   ),
+                  if (showBiometricButton) ...[
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: isBusy || isBiometricAuthenticating
+                          ? null
+                          : onBiometricUnlock,
+                      icon: isBiometricAuthenticating
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.fingerprint_rounded),
+                      label: Text(
+                        isBiometricAuthenticating
+                            ? 'Se verifica...'
+                            : biometricLabel,
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 13,
+                        ),
+                        side: BorderSide(
+                          color: SecureChatColors.violetBright.withOpacity(0.55),
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
                   _PinKeyboard(onDigit: onDigit, onDelete: onDelete),
                   const SizedBox(height: 12),
                 ],
@@ -643,9 +737,9 @@ class _ContactEntrySheetState extends State<_ContactEntrySheet> {
       padding: EdgeInsets.only(bottom: bottomInset),
       child: DraggableScrollableSheet(
         expand: false,
-        initialChildSize: 0.72,
-        minChildSize: 0.42,
-        maxChildSize: 0.92,
+        initialChildSize: 0.64,
+        minChildSize: 0.38,
+        maxChildSize: 0.90,
         builder: (context, scrollController) {
           return Container(
             decoration: const BoxDecoration(
@@ -1050,6 +1144,17 @@ class _VaultChatRootState extends State<VaultChatRoot>
     _showSnackBar('ID copiat in clipboard!');
   }
 
+
+  ConversationModel? _findConversationByPeer(String publicKey) {
+    final normalized = publicKey.trim().toLowerCase();
+    for (final conversation in _conversations) {
+      if (conversation.peerPublicKey.trim().toLowerCase() == normalized) {
+        return conversation;
+      }
+    }
+    return null;
+  }
+
   Future<void> _openConversation(ConversationModel conversation) async {
     await _openChatWithRecipient(conversation.peerPublicKey);
   }
@@ -1105,6 +1210,12 @@ class _VaultChatRootState extends State<VaultChatRoot>
           onConversationChanged: _reloadConversations,
           onConversationDeleted: (peerPublicKey) async {
             await _contactService?.deleteContact(peerPublicKey);
+            final prefs = await SharedPreferences.getInstance();
+            final lastRecipient = prefs.getString(_lastRecipientStorageKey);
+            if (lastRecipient?.trim().toLowerCase() ==
+                peerPublicKey.trim().toLowerCase()) {
+              await prefs.remove(_lastRecipientStorageKey);
+            }
             await _reloadConversations();
           },
         ),
@@ -1130,6 +1241,44 @@ class _VaultChatRootState extends State<VaultChatRoot>
     }
 
     await _showStartChatDialog();
+  }
+
+
+  Future<bool> _confirmExistingIdentityUpdate({
+    required String existingLabel,
+    required String requestedLabel,
+  }) async {
+    final current = existingLabel.trim().isNotEmpty
+        ? existingLabel.trim()
+        : 'Contact existent';
+    final requested = requestedLabel.trim();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('ID deja existent'),
+          content: Text(
+            requested.isEmpty
+                ? 'Acest ID public exista deja in VaultChat. Se va deschide conversatia existenta.'
+                : 'Acest ID public exista deja ca "$current". Vrei sa actualizezi numele in "$requested" si sa deschizi conversatia existenta?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(requested.isEmpty ? 'OK' : 'Pastreaza'),
+            ),
+            if (requested.isNotEmpty)
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Actualizeaza'),
+              ),
+          ],
+        );
+      },
+    );
+
+    return result == true;
   }
 
   Future<void> _showStartChatDialog() async {
@@ -1161,6 +1310,34 @@ class _VaultChatRootState extends State<VaultChatRoot>
     }
 
     final name = result.displayName.trim();
+    final existingConversation = _findConversationByPeer(publicKey);
+    final existingContact = _contactsByKey[publicKey];
+    final existingLabel = (existingContact?.label.trim().isNotEmpty == true
+            ? existingContact!.label
+            : existingConversation?.peerLabel)
+        ?.trim();
+    final alreadyExists = existingConversation != null || existingContact != null;
+
+    if (alreadyExists) {
+      final shouldUpdateName = name.isNotEmpty &&
+          name != existingLabel &&
+          await _confirmExistingIdentityUpdate(
+            existingLabel: existingLabel ?? 'Contact existent',
+            requestedLabel: name,
+          );
+
+      if (shouldUpdateName) {
+        await _contactService?.upsertContact(publicKey: publicKey, displayName: name);
+      } else if (name.isEmpty) {
+        _showSnackBar('Acest ID exista deja. Deschid conversatia existenta.');
+      }
+
+      await _reloadConversations();
+      if (!mounted) return;
+      await _openChatWithRecipient(publicKey);
+      return;
+    }
+
     if (name.isNotEmpty) {
       await _contactService?.upsertContact(publicKey: publicKey, displayName: name);
     }
@@ -1213,6 +1390,25 @@ class _VaultChatRootState extends State<VaultChatRoot>
       return;
     }
 
+    final existingConversation = _findConversationByPeer(publicKey);
+    final existingContact = _contactsByKey[publicKey];
+    final alreadyExists = existingConversation != null || existingContact != null;
+
+    if (alreadyExists) {
+      final existingLabel = (existingContact?.label.trim().isNotEmpty == true
+              ? existingContact!.label
+              : existingConversation?.peerLabel)
+          ?.trim();
+      final shouldUpdateName = await _confirmExistingIdentityUpdate(
+        existingLabel: existingLabel ?? 'Contact existent',
+        requestedLabel: name,
+      );
+      if (!shouldUpdateName) {
+        await _openChatWithRecipient(publicKey);
+        return;
+      }
+    }
+
     await _contactService?.upsertContact(publicKey: publicKey, displayName: name);
 
     final storage = _storageService;
@@ -1226,7 +1422,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
     await _reloadConversations();
     if (!mounted) return;
-    _showSnackBar('Contact salvat.');
+    _showSnackBar(alreadyExists ? 'Contact actualizat.' : 'Contact salvat.');
   }
 
 

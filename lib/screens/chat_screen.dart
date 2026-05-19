@@ -80,6 +80,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   StreamSubscription<RemoteConversationCommand>? _commandSubscription;
   StreamSubscription<SecureChatConnectionSnapshot>? _statusSubscription;
   Timer? _expiryTimer;
+  Timer? _nextExpiryTimer;
 
   bool _isLoading = true;
   bool _isSending = false;
@@ -162,19 +163,46 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   void _startExpiryTimer() {
     _expiryTimer?.cancel();
-    // TTL trebuie verificat si cand utilizatorul ramane in chat, nu doar la reconnect.
+    _nextExpiryTimer?.cancel();
+
+    // Fallback global pentru cazul in care telefonul suspenda timer-ul punctual.
     _expiryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      unawaited(_purgeExpiredMessages());
+    });
+
+    unawaited(_scheduleNextExpiryTick());
+  }
+
+  Future<void> _scheduleNextExpiryTick() async {
+    _nextExpiryTimer?.cancel();
+    if (_isConversationClosed) return;
+
+    final nextExpiry =
+        await widget.storageService.nextExpiryTimeForConversation(_conversationId);
+    if (!mounted || _isConversationClosed || nextExpiry == null) return;
+
+    final delay = nextExpiry.difference(DateTime.now());
+    final safeDelay = delay.isNegative
+        ? const Duration(milliseconds: 150)
+        : delay + const Duration(milliseconds: 300);
+
+    _nextExpiryTimer = Timer(safeDelay, () {
       unawaited(_purgeExpiredMessages());
     });
   }
 
   Future<void> _purgeExpiredMessages() async {
+    if (_isConversationClosed) return;
+
     final deleted = await widget.storageService.deleteExpiredMessages();
-    if (!mounted) return;
+    if (!mounted || _isConversationClosed) return;
+
     if (deleted > 0) {
       await _loadMessages();
       await widget.onConversationChanged();
     }
+
+    await _scheduleNextExpiryTick();
   }
 
   void _showTtlPicker() {
@@ -344,6 +372,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (chosen == null || !mounted) return;
       setState(() => _selectedTtl = chosen);
       await _saveTtlPreference(chosen);
+      await _scheduleNextExpiryTick();
 
       final label = chosen == TtlOption.never
           ? 'Autodistrugere dezactivata.'
@@ -433,6 +462,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _isConversationClosed = true;
 
     _expiryTimer?.cancel();
+    _nextExpiryTimer?.cancel();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_ttlPrefKey);
     await _messageSubscription?.cancel();
     await _commandSubscription?.cancel();
 
@@ -465,9 +497,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // ─── Mesaje ────────────────────────────────────────────────────────────────
 
   Future<void> _loadMessages() async {
+    if (_isConversationClosed) return;
     final messages = await widget.storageService.loadConversation(_conversationId);
 
-    if (!mounted) return;
+    if (!mounted || _isConversationClosed) return;
 
     if (mounted) setState(() {
       _messages
@@ -492,6 +525,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
     setState(() => _insertOrReplaceMessage(message));
+    await _scheduleNextExpiryTick();
     _scrollToBottom();
   }
 
@@ -550,6 +584,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       await widget.storageService.saveMessage(outgoingMessage);
       await widget.onConversationChanged();
+      await _scheduleNextExpiryTick();
 
       if (!mounted) return;
 
@@ -647,6 +682,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _commandSubscription?.cancel();
     _statusSubscription?.cancel();
     _expiryTimer?.cancel();
+    _nextExpiryTimer?.cancel();
     _messageController.dispose();
     _listScrollController.dispose();
     super.dispose();

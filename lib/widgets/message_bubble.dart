@@ -18,7 +18,7 @@ class MessageBubble extends StatelessWidget {
         mainAxisAlignment: isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (!isMine) _Avatar(label: message.senderLabel),
+          if (!isMine) _Avatar(label: message.senderLabel, seed: message.senderPublicKey),
           if (!isMine) const SizedBox(width: 8),
           Flexible(
             child: AnimatedContainer(
@@ -98,7 +98,7 @@ class MessageBubble extends StatelessWidget {
             ),
           ),
           if (isMine) const SizedBox(width: 8),
-          if (isMine) const _MineAvatar(),
+          if (isMine) _MineAvatar(seed: message.senderPublicKey),
         ],
       ),
     );
@@ -111,28 +111,37 @@ class MessageBubble extends StatelessWidget {
 
 class _Avatar extends StatelessWidget {
   final String label;
+  final String seed;
 
-  const _Avatar({required this.label});
+  const _Avatar({required this.label, required this.seed});
 
   @override
   Widget build(BuildContext context) {
     final letter = label.isNotEmpty ? label.substring(0, 1).toUpperCase() : '?';
 
     return Container(
-      width: 28,
-      height: 28,
+      width: 30,
+      height: 30,
+      padding: const EdgeInsets.all(1.5),
       decoration: BoxDecoration(
-        color: SecureChatColors.cardAlt.withOpacity(0.88),
+        gradient: SecureChatAvatar.gradientFor(seed.isNotEmpty ? seed : label),
         shape: BoxShape.circle,
-        border: Border.all(color: SecureChatColors.borderSoft.withOpacity(0.62)),
+        boxShadow: SecureChatShadows.subtleGlow,
       ),
-      child: Center(
-        child: Text(
-          letter,
-          style: const TextStyle(
-            fontSize: 12,
-            color: SecureChatColors.violetSoft,
-            fontWeight: FontWeight.w800,
+      child: Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: SecureChatColors.deepNavy.withOpacity(0.18),
+          border: Border.all(color: Colors.white.withOpacity(0.16)),
+        ),
+        child: Center(
+          child: Text(
+            letter,
+            style: const TextStyle(
+              fontSize: 12,
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+            ),
           ),
         ),
       ),
@@ -141,16 +150,19 @@ class _Avatar extends StatelessWidget {
 }
 
 class _MineAvatar extends StatelessWidget {
-  const _MineAvatar();
+  final String seed;
+
+  const _MineAvatar({required this.seed});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 28,
-      height: 28,
-      decoration: const BoxDecoration(
-        gradient: SecureChatGradients.primary,
+      width: 30,
+      height: 30,
+      decoration: BoxDecoration(
+        gradient: SecureChatAvatar.gradientFor(seed.isNotEmpty ? seed : 'me'),
         shape: BoxShape.circle,
+        boxShadow: SecureChatShadows.subtleGlow,
       ),
       child: const Icon(Icons.person_rounded, size: 15, color: Colors.white),
     );

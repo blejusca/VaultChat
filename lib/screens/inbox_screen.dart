@@ -385,7 +385,7 @@ class _ConversationTile extends StatelessWidget {
           ),
           child: Row(
             children: [
-              _Avatar(label: peerLabel),
+              _Avatar(label: peerLabel, seed: conversation.peerPublicKey),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -482,28 +482,38 @@ class _ConversationTile extends StatelessWidget {
 
 class _Avatar extends StatelessWidget {
   final String label;
+  final String seed;
 
-  const _Avatar({required this.label});
+  const _Avatar({required this.label, required this.seed});
 
   @override
   Widget build(BuildContext context) {
     final letter = label.isNotEmpty ? label.substring(0, 1).toUpperCase() : '?';
 
     return Container(
-      width: 54,
-      height: 54,
+      width: 56,
+      height: 56,
+      padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        gradient: SecureChatGradients.accent,
+        gradient: SecureChatAvatar.gradientFor(seed.isNotEmpty ? seed : label),
         boxShadow: SecureChatShadows.subtleGlow,
       ),
-      child: Center(
-        child: Text(
-          letter,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 19,
-            fontWeight: FontWeight.w800,
+      child: Container(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: SecureChatColors.deepNavy.withOpacity(0.10),
+          border: Border.all(color: Colors.white.withOpacity(0.18)),
+        ),
+        child: Center(
+          child: Text(
+            letter,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 19,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.2,
+            ),
           ),
         ),
       ),
