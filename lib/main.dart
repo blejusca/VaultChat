@@ -6,10 +6,12 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/conversation_model.dart';
+import 'models/contact_model.dart';
 import 'models/message_model.dart';
 import 'screens/chat_screen.dart';
 import 'screens/inbox_screen.dart';
 import 'services/conversation_storage_service.dart';
+import 'services/contact_storage_service.dart';
 import 'services/nostr_connection_service.dart';
 import 'services/pin_lock_service.dart';
 import 'theme/secure_chat_theme.dart';
@@ -67,14 +69,14 @@ class _PinGateState extends State<PinGate> {
       final attempts = await _pinService.failedAttempts();
 
       if (!mounted) return;
-      setState(() {
+      if (mounted) setState(() {
         _hasPin = hasPin;
         _failedAttempts = attempts;
         _isLoading = false;
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
+      if (mounted) setState(() {
         _errorMessage = 'Eroare PIN: $e';
         _isLoading = false;
       });
@@ -96,7 +98,7 @@ class _PinGateState extends State<PinGate> {
 
     if (_hasPin) {
       if (_enteredPin.isEmpty) return;
-      setState(() {
+      if (mounted) setState(() {
         _enteredPin = _enteredPin.substring(0, _enteredPin.length - 1);
         _errorMessage = '';
       });
@@ -105,13 +107,13 @@ class _PinGateState extends State<PinGate> {
 
     if (_isConfirmingNewPin) {
       if (_confirmPin.isEmpty) return;
-      setState(() {
+      if (mounted) setState(() {
         _confirmPin = _confirmPin.substring(0, _confirmPin.length - 1);
         _errorMessage = '';
       });
     } else {
       if (_newPin.isEmpty) return;
-      setState(() {
+      if (mounted) setState(() {
         _newPin = _newPin.substring(0, _newPin.length - 1);
         _errorMessage = '';
       });
@@ -121,7 +123,7 @@ class _PinGateState extends State<PinGate> {
   void _addCreateDigit(String digit) {
     if (!_isConfirmingNewPin) {
       if (_newPin.length >= PinLockService.pinLength) return;
-      setState(() {
+      if (mounted) setState(() {
         _newPin += digit;
         _errorMessage = '';
       });
@@ -136,7 +138,7 @@ class _PinGateState extends State<PinGate> {
     }
 
     if (_confirmPin.length >= PinLockService.pinLength) return;
-    setState(() {
+    if (mounted) setState(() {
       _confirmPin += digit;
       _errorMessage = '';
     });
@@ -149,7 +151,7 @@ class _PinGateState extends State<PinGate> {
   void _addVerifyDigit(String digit) {
     if (_enteredPin.length >= PinLockService.pinLength) return;
 
-    setState(() {
+    if (mounted) setState(() {
       _enteredPin += digit;
       _errorMessage = '';
     });
@@ -163,7 +165,7 @@ class _PinGateState extends State<PinGate> {
     if (!mounted || _isBusy) return;
 
     if (_newPin != _confirmPin) {
-      setState(() {
+      if (mounted) setState(() {
         _newPin = '';
         _confirmPin = '';
         _isConfirmingNewPin = false;
@@ -180,7 +182,7 @@ class _PinGateState extends State<PinGate> {
       _openVaultChatRoot();
     } catch (e) {
       if (!mounted) return;
-      setState(() {
+      if (mounted) setState(() {
         _errorMessage = 'Nu am putut salva PIN-ul: $e';
         _newPin = '';
         _confirmPin = '';
@@ -208,7 +210,7 @@ class _PinGateState extends State<PinGate> {
       if (result.wiped) {
         await _showWipeDialog();
         if (!mounted) return;
-        setState(() {
+        if (mounted) setState(() {
           _hasPin = false;
           _isBusy = false;
           _failedAttempts = 0;
@@ -222,7 +224,7 @@ class _PinGateState extends State<PinGate> {
         return;
       }
 
-      setState(() {
+      if (mounted) setState(() {
         _failedAttempts = PinLockService.maxAttempts - result.attemptsLeft;
         _enteredPin = '';
         _isBusy = false;
@@ -230,7 +232,7 @@ class _PinGateState extends State<PinGate> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() {
+      if (mounted) setState(() {
         _enteredPin = '';
         _isBusy = false;
         _errorMessage = 'Eroare verificare PIN: $e';
@@ -245,6 +247,7 @@ class _PinGateState extends State<PinGate> {
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
+        scrollable: true,
         title: const Text('Date sterse'),
         icon: const Icon(Icons.delete_forever, color: SecureChatColors.danger, size: 34),
         content: const Text(
@@ -558,6 +561,223 @@ class _PinKeyboard extends StatelessWidget {
   }
 }
 
+
+class _ContactDialogResult {
+  final String displayName;
+  final String publicKeyOrPayload;
+
+  const _ContactDialogResult({
+    required this.displayName,
+    required this.publicKeyOrPayload,
+  });
+}
+
+class _ContactEntrySheet extends StatefulWidget {
+  final String title;
+  final String subtitle;
+  final String actionLabel;
+  final bool requireName;
+
+  const _ContactEntrySheet({
+    required this.title,
+    required this.subtitle,
+    required this.actionLabel,
+    required this.requireName,
+  });
+
+  @override
+  State<_ContactEntrySheet> createState() => _ContactEntrySheetState();
+}
+
+class _ContactEntrySheetState extends State<_ContactEntrySheet> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _keyController = TextEditingController();
+  final FocusNode _nameFocusNode = FocusNode();
+  final FocusNode _keyFocusNode = FocusNode();
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _keyController.dispose();
+    _nameFocusNode.dispose();
+    _keyFocusNode.dispose();
+    super.dispose();
+  }
+
+  String? _extractPublicKey(String value) {
+    final raw = value.trim();
+    if (raw.isEmpty) return null;
+    final uri = Uri.tryParse(raw);
+    final queryKey = uri?.queryParameters['pubkey'];
+    if (queryKey != null && RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(queryKey.trim())) {
+      return queryKey.trim().toLowerCase();
+    }
+    final match = RegExp(r'[a-fA-F0-9]{64}').firstMatch(raw);
+    if (match == null) return null;
+    return match.group(0)!.toLowerCase();
+  }
+
+  bool get _hasValidKey => _extractPublicKey(_keyController.text) != null;
+  bool get _hasValidName => !widget.requireName || _nameController.text.trim().isNotEmpty;
+  bool get _canSubmit => _hasValidKey && _hasValidName;
+
+  void _submit() {
+    if (!_canSubmit) return;
+    Navigator.of(context).pop(
+      _ContactDialogResult(
+        displayName: _nameController.text.trim(),
+        publicKeyOrPayload: _keyController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final key = _extractPublicKey(_keyController.text);
+    final keyLength = key?.length ?? _keyController.text.trim().length;
+
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.72,
+        minChildSize: 0.42,
+        maxChildSize: 0.92,
+        builder: (context, scrollController) {
+          return Container(
+            decoration: const BoxDecoration(
+              gradient: SecureChatGradients.card,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+              border: Border(
+                top: BorderSide(color: SecureChatColors.borderSoft),
+              ),
+            ),
+            child: SingleChildScrollView(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(22, 14, 22, 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 42,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: SecureChatColors.borderSoft.withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: SecureChatColors.violet.withOpacity(0.16),
+                        ),
+                        child: const Icon(
+                          Icons.person_add_alt_1_rounded,
+                          color: SecureChatColors.violetSoft,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          widget.title,
+                          style: const TextStyle(
+                            color: SecureChatColors.text,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    widget.subtitle,
+                    style: const TextStyle(
+                      color: SecureChatColors.mutedText,
+                      height: 1.35,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  TextField(
+                    controller: _nameController,
+                    focusNode: _nameFocusNode,
+                    textInputAction: TextInputAction.next,
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: (_) => _keyFocusNode.requestFocus(),
+                    decoration: InputDecoration(
+                      labelText: widget.requireName
+                          ? 'Nume contact'
+                          : 'Nume contact optional',
+                      prefixIcon: const Icon(Icons.badge_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: _keyController,
+                    focusNode: _keyFocusNode,
+                    minLines: 1,
+                    maxLines: 3,
+                    textInputAction: TextInputAction.done,
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: (_) => _submit(),
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5),
+                    decoration: InputDecoration(
+                      labelText: 'ID public sau link VaultChat',
+                      prefixIcon: const Icon(Icons.key_rounded),
+                      suffixIcon: _hasValidKey
+                          ? const Icon(Icons.check_circle, color: SecureChatColors.turquoise)
+                          : const Icon(Icons.error, color: SecureChatColors.danger),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _hasValidKey ? 'ID valid detectat.' : '$keyLength/64 caractere',
+                    style: TextStyle(
+                      color: _hasValidKey ? SecureChatColors.turquoise : SecureChatColors.danger,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('Anuleaza'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: _canSubmit ? _submit : null,
+                          child: Text(widget.actionLabel),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 class VaultChatRoot extends StatefulWidget {
   const VaultChatRoot({super.key});
 
@@ -579,15 +799,18 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
   NostrKeyPairs? _keyPair;
   ConversationStorageService? _storageService;
+  ContactStorageService? _contactService;
   NostrConnectionService? _connectionService;
 
   StreamSubscription<SecureChatConnectionSnapshot>? _statusSubscription;
   StreamSubscription<MessageModel>? _incomingMessageSubscription;
   StreamSubscription<RemoteConversationCommand>? _remoteCommandSubscription;
+  Timer? _globalExpiryTimer;
 
   bool _isLoading = true;
   String? _startupError;
   List<ConversationModel> _conversations = <ConversationModel>[];
+  Map<String, ContactModel> _contactsByKey = <String, ContactModel>{};
 
   static const Duration _autoLockAfterBackground = Duration(seconds: 2);
   DateTime? _backgroundedAt;
@@ -636,6 +859,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
           force: true,
         ),
       );
+      unawaited(_purgeExpiredMessagesAndReload());
       unawaited(_reloadConversations());
     }
   }
@@ -654,10 +878,14 @@ class _VaultChatRootState extends State<VaultChatRoot>
     _incomingMessageSubscription = null;
     await _remoteCommandSubscription?.cancel();
     _remoteCommandSubscription = null;
+    _globalExpiryTimer?.cancel();
+    _globalExpiryTimer = null;
     await _connectionService?.dispose();
     _connectionService = null;
     await _storageService?.close();
     _storageService = null;
+    await _contactService?.close();
+    _contactService = null;
 
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
@@ -670,7 +898,10 @@ class _VaultChatRootState extends State<VaultChatRoot>
     try {
       await _loadOrCreateKeys();
       _storageService = await ConversationStorageService.open();
+      _contactService = await ContactStorageService.open();
       await _startNostrConnectionService();
+      _startGlobalExpiryTimer();
+      await _purgeExpiredMessagesAndReload();
       await _reloadConversations();
     } catch (e) {
       _startupError = 'Eroare initializare: $e';
@@ -714,7 +945,9 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
     _incomingMessageSubscription =
         service.messageStream.listen((message) async {
+      await _storageService?.deleteExpiredMessages();
       await _storageService?.saveMessage(message);
+      await _storageService?.deleteExpiredMessages();
       if (!mounted) return;
       await _reloadConversations();
     });
@@ -741,6 +974,8 @@ class _VaultChatRootState extends State<VaultChatRoot>
     _incomingMessageSubscription = null;
     await _remoteCommandSubscription?.cancel();
     _remoteCommandSubscription = null;
+    _globalExpiryTimer?.cancel();
+    _globalExpiryTimer = null;
     await _connectionService?.dispose();
     _connectionService = null;
 
@@ -753,9 +988,43 @@ class _VaultChatRootState extends State<VaultChatRoot>
     if (storage == null) return;
 
     final conversations = await storage.loadConversations();
+    final contacts = await _contactService?.loadContacts() ?? <ContactModel>[];
+    final contactsByKey = <String, ContactModel>{
+      for (final contact in contacts) contact.publicKey.toLowerCase(): contact,
+    };
+
+    final displayConversations = conversations.map((conversation) {
+      final contact = contactsByKey[conversation.peerPublicKey.toLowerCase()];
+      final label = contact?.label;
+      if (label == null || label.isEmpty) return conversation;
+      return conversation.copyWith(peerLabel: label);
+    }).toList();
+
     if (!mounted) return;
 
-    setState(() => _conversations = conversations);
+    setState(() {
+      _contactsByKey = contactsByKey;
+      _conversations = displayConversations;
+    });
+  }
+
+  void _startGlobalExpiryTimer() {
+    _globalExpiryTimer?.cancel();
+    _globalExpiryTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+      unawaited(_purgeExpiredMessagesAndReload());
+    });
+  }
+
+  Future<void> _purgeExpiredMessagesAndReload() async {
+    final storage = _storageService;
+    if (storage == null) return;
+
+    final deleted = await storage.deleteExpiredMessages();
+    if (!mounted) return;
+
+    if (deleted > 0) {
+      await _reloadConversations();
+    }
   }
 
   Future<void> _manualReconnect() async {
@@ -789,7 +1058,21 @@ class _VaultChatRootState extends State<VaultChatRoot>
     }
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_lastRecipientStorageKey, recipientPublicKey);
+    final normalizedRecipient =
+        _extractPublicKey(recipientPublicKey) ?? recipientPublicKey.trim().toLowerCase();
+    await prefs.setString(_lastRecipientStorageKey, normalizedRecipient);
+
+    final storedContactLabel =
+        await _contactService?.displayNameFor(normalizedRecipient);
+    final contactLabel = storedContactLabel ??
+        _contactsByKey[normalizedRecipient.toLowerCase()]?.label;
+
+    await storage.ensureConversationExists(
+      myPublicKey: keyPair.public,
+      peerPublicKey: normalizedRecipient,
+      peerLabel: contactLabel,
+    );
+    await _reloadConversations();
 
     if (!mounted) return;
 
@@ -797,9 +1080,10 @@ class _VaultChatRootState extends State<VaultChatRoot>
       MaterialPageRoute<void>(
         builder: (_) => ChatScreen(
           myPublicKey: keyPair.public,
-          recipientPublicKey: recipientPublicKey,
+          recipientPublicKey: normalizedRecipient,
           storageService: storage,
           connectionService: connection,
+          contactLabel: contactLabel,
           onConversationChanged: _reloadConversations,
         ),
       ),
@@ -827,96 +1111,92 @@ class _VaultChatRootState extends State<VaultChatRoot>
   }
 
   Future<void> _showStartChatDialog() async {
-    final controller = TextEditingController();
+    final result = await showModalBottomSheet<_ContactDialogResult>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => const _ContactEntrySheet(
+        title: 'Conversație nouă',
+        subtitle: 'Introdu ID-ul public sau linkul VaultChat al destinatarului.',
+        actionLabel: 'Deschide',
+        requireName: false,
+      ),
+    );
 
-    try {
-      final recipient = await showDialog<String>(
-        context: context,
-        builder: (dialogContext) {
-          return StatefulBuilder(
-            builder: (context, setDialogState) {
-              final text = controller.text.trim();
-              final isValid = _isValidPublicKey(text);
+    if (!mounted || result == null) return;
 
-              return AlertDialog(
-                icon: const Icon(Icons.add_comment_outlined, color: SecureChatColors.violetSoft),
-                title: const Text('Conversatie noua', textAlign: TextAlign.center),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Introdu cheia publica a destinatarului:',
-                      style: TextStyle(fontSize: 13),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: controller,
-                      maxLines: 2,
-                      minLines: 1,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                      ),
-                      decoration: InputDecoration(
-                        border: const OutlineInputBorder(),
-                        isDense: true,
-                        suffixIcon: isValid
-                            ? const Icon(Icons.check_circle,
-                                color: SecureChatColors.turquoise)
-                            : const Icon(Icons.error, color: SecureChatColors.danger),
-                      ),
-                      onChanged: (value) {
-                        final cleaned = value.replaceAll(
-                          RegExp(r'[^a-fA-F0-9]'),
-                          '',
-                        );
-                        if (cleaned != value) {
-                          controller.value = TextEditingValue(
-                            text: cleaned,
-                            selection: TextSelection.collapsed(
-                              offset: cleaned.length,
-                            ),
-                          );
-                        }
-                        setDialogState(() {});
-                      },
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '${controller.text.trim().length}/64 caractere',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isValid ? SecureChatColors.turquoise : SecureChatColors.danger,
-                      ),
-                    ),
-                  ],
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(dialogContext),
-                    child: const Text('Anuleaza'),
-                  ),
-                  FilledButton(
-                    onPressed: isValid
-                        ? () => Navigator.pop(dialogContext, text)
-                        : null,
-                    child: const Text('Deschide'),
-                  ),
-                ],
-              );
-            },
-          );
-        },
-      );
-
-      if (recipient != null && _isValidPublicKey(recipient)) {
-        await _openChatWithRecipient(recipient.trim());
-      }
-    } finally {
-      controller.dispose();
+    final publicKey = _extractPublicKey(result.publicKeyOrPayload);
+    if (publicKey == null) {
+      _showSnackBar('ID public invalid. Trebuie să aibă 64 caractere hex.', isError: true);
+      return;
     }
+
+    final name = result.displayName.trim();
+    if (name.isNotEmpty) {
+      await _contactService?.upsertContact(publicKey: publicKey, displayName: name);
+    }
+
+    final keyPair = _keyPair;
+    final storage = _storageService;
+    if (keyPair != null && storage != null) {
+      await storage.ensureConversationExists(
+        myPublicKey: keyPair.public,
+        peerPublicKey: publicKey,
+        peerLabel: name.isNotEmpty ? name : null,
+      );
+    }
+    await _reloadConversations();
+
+    if (!mounted) return;
+    await _openChatWithRecipient(publicKey);
   }
+
+  Future<void> _showAddContactDialog() async {
+    final result = await showModalBottomSheet<_ContactDialogResult>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => const _ContactEntrySheet(
+        title: 'Contact nou',
+        subtitle: 'Salvează un nume local pentru un ID public VaultChat.',
+        actionLabel: 'Salvează',
+        requireName: true,
+      ),
+    );
+
+    if (!mounted || result == null) return;
+
+    final publicKey = _extractPublicKey(result.publicKeyOrPayload);
+    if (publicKey == null) {
+      _showSnackBar('ID public invalid. Trebuie să aibă 64 caractere hex.', isError: true);
+      return;
+    }
+
+    final name = result.displayName.trim();
+    if (name.isEmpty) {
+      _showSnackBar('Introdu un nume pentru contact.', isError: true);
+      return;
+    }
+
+    await _contactService?.upsertContact(publicKey: publicKey, displayName: name);
+
+    final keyPair = _keyPair;
+    final storage = _storageService;
+    if (keyPair != null && storage != null) {
+      await storage.ensureConversationExists(
+        myPublicKey: keyPair.public,
+        peerPublicKey: publicKey,
+        peerLabel: name,
+      );
+    }
+
+    await _reloadConversations();
+    if (!mounted) return;
+    _showSnackBar('Contact salvat.');
+  }
+
 
   // ─── EXPORT cheie privata ───────────────────────────────────────────────────
 
@@ -925,6 +1205,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
     showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         icon: const Icon(Icons.warning_amber_rounded, color: SecureChatColors.danger),
         title: const Text('Atentie!', textAlign: TextAlign.center, style: TextStyle(color: SecureChatColors.danger)),
         content: const Text(
@@ -960,6 +1241,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         icon: const Icon(Icons.lock_open_rounded, color: SecureChatColors.danger),
         title: const Text('Cheia ta privata', textAlign: TextAlign.center),
         content: Column(
@@ -1038,6 +1320,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
               final length = text.length;
 
               return AlertDialog(
+        scrollable: true,
                 icon: const Icon(Icons.restore, size: 32),
                 title: const Text(
                   'Restaureaza contul',
@@ -1175,6 +1458,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
         icon: const Icon(Icons.key_rounded, color: SecureChatColors.violetSoft),
         title: const Text('Identitatea ta', textAlign: TextAlign.center),
         content: Column(
@@ -1209,6 +1493,23 @@ class _VaultChatRootState extends State<VaultChatRoot>
                 },
                 icon: const Icon(Icons.copy),
                 label: const Text('Copiaza ID-ul meu'),
+              ),
+            ),
+
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final payload = _vaultContactPayload(_publicKey);
+                  await Clipboard.setData(ClipboardData(text: payload));
+                  if (!ctx.mounted) return;
+                  Navigator.pop(ctx);
+                  if (!mounted) return;
+                  _showSnackBar('Link VaultChat copiat. Poate fi lipit la Contact nou.');
+                },
+                icon: const Icon(Icons.qr_code_2_rounded),
+                label: const Text('Copiaza link VaultChat'),
               ),
             ),
 
@@ -1263,6 +1564,26 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
   // ─── HELPERS ───────────────────────────────────────────────────────────────
 
+
+  static String _vaultContactPayload(String publicKey) {
+    return 'vaultchat://contact?pubkey=${publicKey.trim().toLowerCase()}';
+  }
+
+  static String? _extractPublicKey(String value) {
+    final raw = value.trim();
+    if (raw.isEmpty) return null;
+
+    final uri = Uri.tryParse(raw);
+    final queryKey = uri?.queryParameters['pubkey'];
+    if (queryKey != null && RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(queryKey.trim())) {
+      return queryKey.trim().toLowerCase();
+    }
+
+    final match = RegExp(r'[a-fA-F0-9]{64}').firstMatch(raw);
+    if (match == null) return null;
+    return match.group(0)!.toLowerCase();
+  }
+
   void _showSnackBar(String message, {bool isError = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1289,8 +1610,10 @@ class _VaultChatRootState extends State<VaultChatRoot>
     _statusSubscription?.cancel();
     _incomingMessageSubscription?.cancel();
     _remoteCommandSubscription?.cancel();
+    _globalExpiryTimer?.cancel();
     unawaited(_connectionService?.dispose());
     unawaited(_storageService?.close());
+    unawaited(_contactService?.close());
     super.dispose();
   }
 
@@ -1324,6 +1647,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
       myPublicKey: _publicKey,
       onOpenConversation: _openConversation,
       onNewConversation: _showStartChatDialog,
+      onAddContact: _showAddContactDialog,
       onManualReconnect: _manualReconnect,
       onShowKeys: _showKeysDialog,
       onOpenLastConversation: _openLastConversationOrNewChat,

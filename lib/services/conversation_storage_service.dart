@@ -104,6 +104,50 @@ class ConversationStorageService {
     return !_isBlockedByTombstone(message.conversationId, message.createdAt);
   }
 
+
+  Future<void> ensureConversationExists({
+    required String myPublicKey,
+    required String peerPublicKey,
+    String? peerLabel,
+  }) async {
+    final cleanMyKey = myPublicKey.trim().toLowerCase();
+    final cleanPeerKey = peerPublicKey.trim().toLowerCase();
+    if (cleanMyKey.isEmpty || cleanPeerKey.isEmpty) return;
+
+    final conversationId = _normalizeConversationId(
+      MessageModel.buildConversationId(cleanMyKey, cleanPeerKey),
+    );
+    if (conversationId.isEmpty) return;
+
+    final existingRaw = _conversationsBox.get(conversationId);
+    final existing = existingRaw is Map
+        ? ConversationModel.fromMap(existingRaw)
+        : null;
+
+    final shortLabel = cleanPeerKey.length >= 8
+        ? cleanPeerKey.substring(0, 8)
+        : cleanPeerKey;
+
+    final cleanLabel = peerLabel?.trim();
+    final effectiveLabel = cleanLabel != null && cleanLabel.isNotEmpty
+        ? cleanLabel
+        : (existing?.peerLabel.trim().isNotEmpty == true
+            ? existing!.peerLabel
+            : shortLabel);
+
+    final conversation = ConversationModel(
+      id: conversationId,
+      myPublicKey: cleanMyKey,
+      peerPublicKey: cleanPeerKey,
+      peerLabel: effectiveLabel,
+      lastMessageText: existing?.lastMessageText ?? '',
+      updatedAt: existing?.updatedAt ?? DateTime.now(),
+      unreadCount: existing?.unreadCount ?? 0,
+    );
+
+    await _conversationsBox.put(conversationId, conversation.toMap());
+  }
+
   Future<void> saveMessage(MessageModel message) async {
     if (message.id.trim().isEmpty) return;
     if (message.conversationId.trim().isEmpty) return;
@@ -214,9 +258,19 @@ class ConversationStorageService {
         ? ConversationModel.fromMap(existingRaw)
         : null;
 
-    final peerLabel = message.peerPublicKey.length >= 8
+    final shortLabel = message.peerPublicKey.length >= 8
         ? message.peerPublicKey.substring(0, 8)
         : message.peerPublicKey;
+
+    final incomingLabel = message.senderLabel.trim();
+    final existingLabel = existing?.peerLabel.trim() ?? '';
+    final existingIsShortKey = existingLabel == shortLabel ||
+        existingLabel == message.peerPublicKey ||
+        existingLabel.isEmpty;
+
+    final peerLabel = incomingLabel.isNotEmpty && existingIsShortKey
+        ? incomingLabel
+        : (existingLabel.isNotEmpty ? existingLabel : shortLabel);
 
     final conversation = ConversationModel(
       id: conversationId,
@@ -224,9 +278,7 @@ class ConversationStorageService {
           ? message.senderPublicKey
           : message.recipientPublicKey,
       peerPublicKey: message.peerPublicKey,
-      peerLabel: existing?.peerLabel.isNotEmpty == true
-          ? existing!.peerLabel
-          : peerLabel,
+      peerLabel: peerLabel,
       lastMessageText: message.text,
       updatedAt: message.createdAt,
       unreadCount: existing?.unreadCount ?? 0,
@@ -277,20 +329,40 @@ class ConversationStorageService {
       }
     }
 
-    final conversations = <ConversationModel>[];
+    final byId = <String, ConversationModel>{};
+
+    for (final key in _conversationsBox.keys) {
+      final raw = _conversationsBox.get(key);
+      if (raw is! Map) continue;
+
+      final stored = ConversationModel.fromMap(raw);
+      final conversationId = _normalizeConversationId(
+        stored.id.isNotEmpty ? stored.id : key.toString(),
+      );
+      if (conversationId.isEmpty) continue;
+
+      final tombstone = _deletedAtForConversation(conversationId);
+      final latest = latestMessages[conversationId];
+
+      if (tombstone != null && latest == null) {
+        await _conversationsBox.delete(key);
+        continue;
+      }
+
+      byId[conversationId] = stored.copyWith(id: conversationId);
+    }
 
     for (final entry in latestMessages.entries) {
       final message = entry.value;
-      final rawConversation = _conversationsBox.get(entry.key);
-      final existing = rawConversation is Map
-          ? ConversationModel.fromMap(rawConversation)
-          : null;
+      final existing = byId[entry.key];
 
-      final peerLabel = existing?.peerLabel.isNotEmpty == true
+      final shortLabel = message.peerPublicKey.length >= 8
+          ? message.peerPublicKey.substring(0, 8)
+          : message.peerPublicKey;
+
+      final peerLabel = existing?.peerLabel.trim().isNotEmpty == true
           ? existing!.peerLabel
-          : (message.peerPublicKey.length >= 8
-              ? message.peerPublicKey.substring(0, 8)
-              : message.peerPublicKey);
+          : shortLabel;
 
       final conversation = ConversationModel(
         id: entry.key,
@@ -305,20 +377,12 @@ class ConversationStorageService {
       );
 
       await _conversationsBox.put(entry.key, conversation.toMap());
-      conversations.add(conversation);
+      byId[entry.key] = conversation;
     }
 
-    final validIds = latestMessages.keys.toSet();
-    final keysToDelete = <dynamic>[];
-    for (final key in _conversationsBox.keys) {
-      final normalizedKey = _normalizeConversationId(key.toString());
-      if (!validIds.contains(normalizedKey)) {
-        keysToDelete.add(key);
-      }
-    }
-    for (final key in keysToDelete) {
-      await _conversationsBox.delete(key);
-    }
+    final conversations = byId.values
+        .where((c) => c.peerPublicKey.trim().isNotEmpty)
+        .toList();
 
     conversations.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return conversations;
@@ -403,8 +467,17 @@ class ConversationStorageService {
 
     final messages = await loadConversation(normalizedConversationId);
     if (messages.isEmpty) {
-      await _conversationsBox.delete(normalizedConversationId);
-      await _conversationsBox.delete(conversationId.trim());
+      final raw = _conversationsBox.get(normalizedConversationId);
+      if (raw is Map) {
+        final existing = ConversationModel.fromMap(raw);
+        final cleaned = existing.copyWith(
+          id: normalizedConversationId,
+          lastMessageText: '',
+          updatedAt: existing.updatedAt,
+          unreadCount: 0,
+        );
+        await _conversationsBox.put(normalizedConversationId, cleaned.toMap());
+      }
       return;
     }
 

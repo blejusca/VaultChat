@@ -10,6 +10,7 @@ class InboxScreen extends StatelessWidget {
   final String myPublicKey;
   final ValueChanged<ConversationModel> onOpenConversation;
   final VoidCallback onNewConversation;
+  final VoidCallback onAddContact;
   final VoidCallback onManualReconnect;
   final VoidCallback onShowKeys;
   final VoidCallback onOpenLastConversation;
@@ -21,6 +22,7 @@ class InboxScreen extends StatelessWidget {
     required this.myPublicKey,
     required this.onOpenConversation,
     required this.onNewConversation,
+    required this.onAddContact,
     required this.onManualReconnect,
     required this.onShowKeys,
     required this.onOpenLastConversation,
@@ -60,6 +62,7 @@ class InboxScreen extends StatelessWidget {
                     statusColor: _statusColor(),
                     onManualReconnect: onManualReconnect,
                     onShowKeys: onShowKeys,
+                    onAddContact: onAddContact,
                   ),
                 ),
                 if (conversations.isEmpty)
@@ -100,12 +103,14 @@ class _InboxHeader extends StatelessWidget {
   final Color statusColor;
   final VoidCallback onManualReconnect;
   final VoidCallback onShowKeys;
+  final VoidCallback onAddContact;
 
   const _InboxHeader({
     required this.connectionLabel,
     required this.statusColor,
     required this.onManualReconnect,
     required this.onShowKeys,
+    required this.onAddContact,
   });
 
   @override
@@ -159,7 +164,13 @@ class _InboxHeader extends StatelessWidget {
                 tooltip: 'Reconecteaza manual',
                 onPressed: onManualReconnect,
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
+              _HeaderIconButton(
+                icon: Icons.person_add_alt_1_rounded,
+                tooltip: 'Contact nou',
+                onPressed: onAddContact,
+              ),
+              const SizedBox(width: 8),
               _HeaderIconButton(
                 icon: Icons.key_rounded,
                 tooltip: 'Identitatea ta',

@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'conversation_storage_service.dart';
+import 'contact_storage_service.dart';
 
 class PinLockService {
   static const String _pinHashKey = 'secure_chat_pin_hash_v1';
@@ -85,6 +86,7 @@ class PinLockService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
     await ConversationStorageService.deleteAllLocalData();
+    await ContactStorageService.deleteAllLocalData();
   }
 
   String _generateSalt() {

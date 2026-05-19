@@ -51,6 +51,7 @@ class ChatScreen extends StatefulWidget {
   final String recipientPublicKey;
   final ConversationStorageService storageService;
   final NostrConnectionService connectionService;
+  final String? contactLabel;
   final Future<void> Function() onConversationChanged;
 
   const ChatScreen({
@@ -59,6 +60,7 @@ class ChatScreen extends StatefulWidget {
     required this.recipientPublicKey,
     required this.storageService,
     required this.connectionService,
+    this.contactLabel,
     required this.onConversationChanged,
   });
 
@@ -117,6 +119,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
 
     _loadTtlPreference();
+    _purgeExpiredMessages();
     _loadMessages();
     _startExpiryTimer();
   }
@@ -130,6 +133,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           force: true,
         ),
       );
+      unawaited(_purgeExpiredMessages());
       unawaited(_loadMessages());
     }
   }
@@ -140,7 +144,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(_ttlPrefKey);
     if (!mounted) return;
-    setState(() {
+    if (mounted) setState(() {
       _selectedTtl = TtlOption.values.firstWhere(
         (o) => o.name == saved,
         orElse: () => TtlOption.never,
@@ -162,7 +166,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Future<void> _purgeExpiredMessages() async {
     final deleted = await widget.storageService.deleteExpiredMessages();
-    if (deleted > 0 && mounted) {
+    if (!mounted) return;
+    if (deleted > 0) {
       await _loadMessages();
       await widget.onConversationChanged();
     }
@@ -355,6 +360,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        scrollable: true,
         backgroundColor: SecureChatColors.card,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(SecureChatRadius.xl),
@@ -409,7 +415,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    setState(() {
+    if (mounted) setState(() {
       _messages.clear();
     });
 
@@ -436,7 +442,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    setState(() {
+    if (mounted) setState(() {
       _messages
         ..clear()
         ..addAll(_deduplicateAndSort(messages));
@@ -475,7 +481,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
 
     if (!mounted) return;
-    setState(() {
+    if (mounted) setState(() {
       _messages.clear();
     });
 
@@ -529,7 +535,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
       if (!mounted) return;
 
-      setState(() {
+      if (mounted) setState(() {
         _insertOrReplaceMessage(outgoingMessage);
         _messageController.clear();
       });
@@ -611,6 +617,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   String get _peerLabel {
+    final label = widget.contactLabel?.trim();
+    if (label != null && label.isNotEmpty) return label;
     if (widget.recipientPublicKey.length >= 8) {
       return widget.recipientPublicKey.substring(0, 8);
     }
@@ -668,7 +676,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                               if (index == 0) {
                                 return _EncryptedNotice(ttl: _selectedTtl);
                               }
-                              return MessageBubble(message: _messages[index - 1]);
+                              final message = _messages[index - 1];
+                              final displayMessage = !message.isMine
+                                  ? message.copyWith(senderLabel: _peerLabel)
+                                  : message;
+                              return MessageBubble(message: displayMessage);
                             },
                           ),
               ),
