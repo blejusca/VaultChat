@@ -18,6 +18,8 @@ dependencies:
   hive_flutter: ^1.1.0
   crypto: ^3.0.6
   local_auth: ^2.3.0
+  flutter_secure_storage: ^9.2.4
+  cryptography: ^2.7.0
 
 dev_dependencies:
   flutter_test:

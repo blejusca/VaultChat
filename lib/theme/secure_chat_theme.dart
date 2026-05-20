@@ -135,8 +135,8 @@ class SecureChatTheme {
         foregroundColor: SecureChatColors.text,
         titleTextStyle: TextStyle(
           color: SecureChatColors.text,
-          fontSize: 24,
-          fontWeight: FontWeight.w700,
+          fontSize: 22,
+          fontWeight: FontWeight.w800,
           letterSpacing: -0.35,
         ),
       ),
@@ -245,25 +245,26 @@ class SecureChatTheme {
       dialogTheme: DialogThemeData(
         backgroundColor: SecureChatColors.card,
         surfaceTintColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(SecureChatRadius.xl),
           side: const BorderSide(color: SecureChatColors.border),
         ),
         titleTextStyle: const TextStyle(
           color: SecureChatColors.text,
-          fontSize: 24,
-          fontWeight: FontWeight.w700,
+          fontSize: 22,
+          fontWeight: FontWeight.w800,
           letterSpacing: -0.25,
         ),
         contentTextStyle: const TextStyle(
           color: SecureChatColors.mutedText,
-          fontSize: 14,
-          height: 1.45,
+          fontSize: 13.5,
+          height: 1.38,
         ),
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
+        elevation: 0,
         backgroundColor: SecureChatColors.cardAlt,
         contentTextStyle: const TextStyle(color: SecureChatColors.text),
         shape: RoundedRectangleBorder(

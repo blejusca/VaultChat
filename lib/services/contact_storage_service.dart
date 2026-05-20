@@ -1,17 +1,19 @@
 import 'package:hive_flutter/hive_flutter.dart';
 
+import 'secure_hive_service.dart';
+
 import '../models/contact_model.dart';
 
 class ContactStorageService {
   ContactStorageService._(this._contactsBox);
 
-  static const String _contactsBoxName = 'vaultchat_contacts_v1';
+  static const String _contactsBoxName = 'vaultchat_contacts_v2_encrypted';
 
   final Box _contactsBox;
 
   static Future<ContactStorageService> open() async {
     await Hive.initFlutter();
-    final box = await Hive.openBox(_contactsBoxName);
+    final box = await SecureHiveService.openEncryptedBox(_contactsBoxName);
     return ContactStorageService._(box);
   }
 
@@ -22,6 +24,12 @@ class ContactStorageService {
     }
     try {
       await Hive.deleteBoxFromDisk(_contactsBoxName);
+    } catch (_) {}
+    try {
+      if (Hive.isBoxOpen('vaultchat_contacts_v1')) {
+        await Hive.box('vaultchat_contacts_v1').close();
+      }
+      await Hive.deleteBoxFromDisk('vaultchat_contacts_v1');
     } catch (_) {}
   }
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:dart_nostr/dart_nostr.dart';
 import 'package:nip04/nip04.dart';
 
@@ -72,6 +73,7 @@ class NostrConnectionService {
   static const Duration _connectTimeout = Duration(seconds: 12);
   static const Duration _publishTimeout = Duration(seconds: 12);
   static const Duration _softRefreshInterval = Duration(minutes: 2);
+  static const int _maxSeenIncomingEventIds = 1000;
 
   final List<String> _relayUrls;
   final NostrKeyPairs _keyPair;
@@ -89,6 +91,7 @@ class NostrConnectionService {
   Future<void>? _connectionOperation;
 
   final Set<String> _seenIncomingEventIds = <String>{};
+  final List<String> _seenIncomingEventIdOrder = <String>[];
 
   bool _disposed = false;
   bool _hasSuccessfulConnect = false;
@@ -271,7 +274,7 @@ class NostrConnectionService {
 
     final eventId = _incomingEventId(event);
     if (_seenIncomingEventIds.contains(eventId)) return;
-    _seenIncomingEventIds.add(eventId);
+    _rememberIncomingEventId(eventId);
 
     try {
       final decrypted = Nip04.decrypt(
@@ -548,13 +551,18 @@ class NostrConnectionService {
     return DateTime.now();
   }
 
-  String _stableHash(String input) {
-    var hash = 0x811c9dc5;
-    for (final unit in input.codeUnits) {
-      hash ^= unit;
-      hash = (hash * 0x01000193) & 0xffffffff;
+  void _rememberIncomingEventId(String eventId) {
+    _seenIncomingEventIds.add(eventId);
+    _seenIncomingEventIdOrder.add(eventId);
+
+    while (_seenIncomingEventIdOrder.length > _maxSeenIncomingEventIds) {
+      final oldest = _seenIncomingEventIdOrder.removeAt(0);
+      _seenIncomingEventIds.remove(oldest);
     }
-    return hash.toRadixString(16).padLeft(8, '0');
+  }
+
+  String _stableHash(String input) {
+    return sha256.convert(utf8.encode(input)).toString().substring(0, 16);
   }
 
 

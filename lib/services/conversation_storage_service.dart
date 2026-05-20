@@ -1,5 +1,7 @@
 import 'package:hive_flutter/hive_flutter.dart';
 
+import 'secure_hive_service.dart';
+
 import '../models/conversation_model.dart';
 import '../models/message_model.dart';
 
@@ -12,10 +14,10 @@ class ConversationStorageService {
         _conversationsBox = conversationsBox,
         _deletedConversationsBox = deletedConversationsBox;
 
-  static const String _messagesBoxName = 'secure_chat_messages_v3';
-  static const String _conversationsBoxName = 'secure_chat_conversations_v3';
+  static const String _messagesBoxName = 'secure_chat_messages_v4_encrypted';
+  static const String _conversationsBoxName = 'secure_chat_conversations_v4_encrypted';
   static const String _deletedConversationsBoxName =
-      'secure_chat_deleted_conversations_v1';
+      'secure_chat_deleted_conversations_v2_encrypted';
 
   final Box _messagesBox;
   final Box _conversationsBox;
@@ -78,14 +80,26 @@ class ConversationStorageService {
     try {
       await Hive.deleteBoxFromDisk(_deletedConversationsBoxName);
     } catch (_) {}
+
+    for (final legacyName in const <String>[
+      'secure_chat_messages_v3',
+      'secure_chat_conversations_v3',
+      'secure_chat_deleted_conversations_v1',
+    ]) {
+      try {
+        if (Hive.isBoxOpen(legacyName)) await Hive.box(legacyName).close();
+        await Hive.deleteBoxFromDisk(legacyName);
+      } catch (_) {}
+    }
   }
 
   static Future<ConversationStorageService> open() async {
     await Hive.initFlutter();
-    final messagesBox = await Hive.openBox(_messagesBoxName);
-    final conversationsBox = await Hive.openBox(_conversationsBoxName);
+    final messagesBox = await SecureHiveService.openEncryptedBox(_messagesBoxName);
+    final conversationsBox =
+        await SecureHiveService.openEncryptedBox(_conversationsBoxName);
     final deletedConversationsBox =
-        await Hive.openBox(_deletedConversationsBoxName);
+        await SecureHiveService.openEncryptedBox(_deletedConversationsBoxName);
 
     final service = ConversationStorageService._(
       messagesBox: messagesBox,
@@ -616,6 +630,90 @@ class ConversationStorageService {
     for (final conversationId in conversationIds) {
       await _rebuildOrRemoveConversation(conversationId);
     }
+  }
+
+
+  Future<Map<String, dynamic>> exportBackupSnapshot({
+    required String myPublicKey,
+  }) async {
+    await sanitizeStorage();
+
+    final cleanMyKey = _normalizePublicKey(myPublicKey);
+    final messages = <Map<String, dynamic>>[];
+    final conversations = <Map<String, dynamic>>[];
+
+    for (final raw in _messagesBox.values) {
+      if (raw is! Map) continue;
+      final message = MessageModel.fromMap(raw);
+      if (message.isExpired) continue;
+      final sender = _normalizePublicKey(message.senderPublicKey);
+      final recipient = _normalizePublicKey(message.recipientPublicKey);
+      if (cleanMyKey.isNotEmpty && sender != cleanMyKey && recipient != cleanMyKey) {
+        continue;
+      }
+      final canonicalId = _canonicalConversationIdFromMessage(message);
+      if (canonicalId.isEmpty) continue;
+      if (_isBlockedByTombstone(canonicalId, message.createdAt)) continue;
+      messages.add(message.copyWith(conversationId: canonicalId).toMap());
+    }
+
+    for (final raw in _conversationsBox.values) {
+      if (raw is! Map) continue;
+      final conversation = ConversationModel.fromMap(raw);
+      final canonicalId = _canonicalConversationId(
+        conversation.myPublicKey,
+        conversation.peerPublicKey,
+      );
+      if (canonicalId.isEmpty) continue;
+      if (cleanMyKey.isNotEmpty &&
+          _normalizePublicKey(conversation.myPublicKey) != cleanMyKey) {
+        continue;
+      }
+      conversations.add(conversation.copyWith(id: canonicalId).toMap());
+    }
+
+    return <String, dynamic>{
+      'schema': 1,
+      'messages': messages,
+      'conversations': conversations,
+    };
+  }
+
+  Future<void> restoreBackupSnapshot({
+    required List<MessageModel> messages,
+    required List<ConversationModel> conversations,
+    bool replaceExisting = true,
+  }) async {
+    if (replaceExisting) {
+      await _messagesBox.clear();
+      await _conversationsBox.clear();
+      await _deletedConversationsBox.clear();
+    }
+
+    for (final conversation in conversations) {
+      final canonicalId = _canonicalConversationId(
+        conversation.myPublicKey,
+        conversation.peerPublicKey,
+      );
+      if (canonicalId.isEmpty) continue;
+      await _conversationsBox.put(
+        canonicalId,
+        conversation.copyWith(
+          id: canonicalId,
+          peerLabel: _cleanPeerLabel(
+            proposed: conversation.peerLabel,
+            existing: conversation.peerLabel,
+            peerPublicKey: conversation.peerPublicKey,
+          ),
+        ).toMap(),
+      );
+    }
+
+    for (final message in messages) {
+      await saveMessage(message);
+    }
+
+    await sanitizeStorage();
   }
 
   Future<void> clearAll() async {

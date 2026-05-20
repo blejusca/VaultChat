@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
 
 import 'package:dart_nostr/dart_nostr.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:crypto/crypto.dart';
+import 'package:cryptography/cryptography.dart' as cryptography;
 
 import 'models/conversation_model.dart';
 import 'models/contact_model.dart';
@@ -15,6 +19,7 @@ import 'services/contact_storage_service.dart';
 import 'services/nostr_connection_service.dart';
 import 'services/pin_lock_service.dart';
 import 'services/biometric_lock_service.dart';
+import 'services/secure_key_storage_service.dart';
 import 'theme/secure_chat_theme.dart';
 
 void main() {
@@ -107,22 +112,41 @@ class _PinGateState extends State<PinGate> {
   }
 
   Future<void> _tryBiometricUnlock({bool autoPrompt = false}) async {
-    if (!_hasPin || !_isBiometricAvailable || _isBusy || _isBiometricAuthenticating) {
+    if (!_hasPin || _isBusy || _isBiometricAuthenticating) {
       return;
     }
 
-    if (mounted) {
+    // Defensive re-check immediately before launching the platform biometric UI.
+    // The cached value from startup is not enough on Android: the user may remove
+    // biometrics, or the device may report generic credential support without an
+    // enrolled fingerprint/face. In those cases VaultChat must require the local PIN.
+    final biometricSupport = await _biometricService.supportState();
+    if (!mounted) return;
+
+    if (!biometricSupport.isAvailable) {
       setState(() {
-        _isBiometricAuthenticating = true;
-        if (!autoPrompt) _errorMessage = '';
+        _isBiometricAvailable = false;
+        _isBiometricAuthenticating = false;
+        if (!autoPrompt) {
+          _errorMessage = 'Biometria nu este configurata. Foloseste PIN-ul VaultChat.';
+        }
       });
+      return;
     }
+
+    setState(() {
+      _isBiometricAvailable = true;
+      _biometricLabel = biometricSupport.label;
+      _isBiometricAuthenticating = true;
+      if (!autoPrompt) _errorMessage = '';
+    });
 
     final success = await _biometricService.authenticate();
 
     if (!mounted) return;
 
-    if (success) {
+    if (success && _hasPin) {
+      setState(() => _isBiometricAuthenticating = false);
       _openVaultChatRoot();
       return;
     }
@@ -980,6 +1004,208 @@ class _ContactEntrySheetState extends State<_ContactEntrySheet> {
   }
 }
 
+
+class _IdentityRestoreRequest {
+  const _IdentityRestoreRequest({
+    required this.payload,
+    required this.password,
+  });
+
+  final String payload;
+  final String password;
+}
+
+class _RestoredIdentityBackup {
+  const _RestoredIdentityBackup({
+    required this.privateKey,
+    required this.contacts,
+    this.messages = const <MessageModel>[],
+    this.conversations = const <ConversationModel>[],
+  });
+
+  final String privateKey;
+  final List<ContactModel> contacts;
+  final List<MessageModel> messages;
+  final List<ConversationModel> conversations;
+}
+
+
+String _normalizeVaultChatRestorePayload(String value) {
+  return value.trim().replaceAll(RegExp(r'\s+'), '');
+}
+
+class _RestoreIdentityDialog extends StatefulWidget {
+  const _RestoreIdentityDialog({
+    required this.identityBackupPrefix,
+    required this.dialogWidth,
+    required this.isValidPrivateKey,
+  });
+
+  final String identityBackupPrefix;
+  final double dialogWidth;
+  final bool Function(String value) isValidPrivateKey;
+
+  @override
+  State<_RestoreIdentityDialog> createState() => _RestoreIdentityDialogState();
+}
+
+class _RestoreIdentityDialogState extends State<_RestoreIdentityDialog> {
+  late final TextEditingController _backupController;
+  late final TextEditingController _passwordController;
+  late final FocusNode _backupFocusNode;
+  late final FocusNode _passwordFocusNode;
+  bool _obscurePassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _backupController = TextEditingController();
+    _passwordController = TextEditingController();
+    _backupFocusNode = FocusNode();
+    _passwordFocusNode = FocusNode();
+    _backupController.addListener(_safeRefresh);
+    _passwordController.addListener(_safeRefresh);
+  }
+
+  void _safeRefresh() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _backupController.removeListener(_safeRefresh);
+    _passwordController.removeListener(_safeRefresh);
+    _backupFocusNode.dispose();
+    _passwordFocusNode.dispose();
+    _backupController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cleanPayload = _normalizeVaultChatRestorePayload(_backupController.text);
+    final password = _passwordController.text;
+    final isEncryptedBackup = cleanPayload.startsWith(widget.identityBackupPrefix);
+    final isRawKey = widget.isValidPrivateKey(cleanPayload);
+    final canRestore = isRawKey || (isEncryptedBackup && password.isNotEmpty);
+
+    return AlertDialog(
+      scrollable: true,
+      icon: const Icon(Icons.restore_rounded, color: SecureChatColors.violetSoft),
+      title: const Text('Restaureaza identitatea', textAlign: TextAlign.center),
+      content: SizedBox(
+        width: widget.dialogWidth,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Lipeste backupul criptat VaultChat. Se accepta si cheia privata raw de 64 caractere pentru compatibilitate veche.',
+              style: TextStyle(fontSize: 13, height: 1.4),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _backupController,
+              focusNode: _backupFocusNode,
+              maxLines: 4,
+              minLines: 2,
+              autocorrect: false,
+              enableSuggestions: false,
+              keyboardType: TextInputType.visiblePassword,
+              textInputAction: TextInputAction.done,
+              style: const TextStyle(fontSize: 10.5, height: 1.20, fontFamily: 'monospace'),
+              decoration: InputDecoration(
+                labelText: 'Backup criptat sau cheie privata',
+                border: const OutlineInputBorder(),
+                suffixIcon: canRestore
+                    ? const Icon(Icons.check_circle, color: SecureChatColors.turquoise)
+                    : const Icon(Icons.error, color: SecureChatColors.danger),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isEncryptedBackup
+                  ? 'Backup criptat detectat.'
+                  : isRawKey
+                      ? 'Cheie privata raw detectata.'
+                      : '${cleanPayload.length} caractere',
+              style: TextStyle(
+                fontSize: 12,
+                color: canRestore || isEncryptedBackup || isRawKey
+                    ? SecureChatColors.turquoise
+                    : SecureChatColors.danger,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Visibility(
+              visible: isEncryptedBackup,
+              maintainState: true,
+              maintainAnimation: true,
+              maintainSize: false,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: TextField(
+                  controller: _passwordController,
+                  focusNode: _passwordFocusNode,
+                  obscureText: _obscurePassword,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  keyboardType: TextInputType.visiblePassword,
+                  textInputAction: TextInputAction.done,
+                  decoration: InputDecoration(
+                    labelText: 'Parola backup',
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
+                      onPressed: () {
+                        if (!mounted) return;
+                        setState(() => _obscurePassword = !_obscurePassword);
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                color: SecureChatColors.warning.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: SecureChatColors.warning.withOpacity(0.28)),
+              ),
+              child: const Text(
+                'Restaurarea inlocuieste identitatea curenta si reconecteaza aplicatia.',
+                style: TextStyle(fontSize: 11, color: SecureChatColors.warning, height: 1.35),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+          child: const Text('Anuleaza'),
+        ),
+        FilledButton(
+          onPressed: canRestore
+              ? () => Navigator.of(context, rootNavigator: true).pop(
+                    _IdentityRestoreRequest(
+                      payload: cleanPayload,
+                      password: password,
+                    ),
+                  )
+              : null,
+          child: const Text('Restaureaza'),
+        ),
+      ],
+    );
+  }
+}
+
 class VaultChatRoot extends StatefulWidget {
   const VaultChatRoot({super.key});
 
@@ -994,7 +1220,6 @@ class _VaultChatRootState extends State<VaultChatRoot>
     'wss://nos.lol',
   ];
 
-  static const String _privateKeyStorageKey = 'nostr_private_key_hex';
   static const String _lastRecipientStorageKey = 'nostr_last_recipient_hex';
 
   final Nostr _nostr = Nostr.instance;
@@ -1015,8 +1240,11 @@ class _VaultChatRootState extends State<VaultChatRoot>
   Map<String, ContactModel> _contactsByKey = <String, ContactModel>{};
 
   static const Duration _autoLockAfterBackground = Duration(seconds: 2);
+  static const Duration _sensitiveClipboardTtl = Duration(seconds: 90);
   DateTime? _backgroundedAt;
   bool _isNavigatingToLock = false;
+  Timer? _clipboardClearTimer;
+  String? _lastSensitiveClipboardValue;
 
   SecureChatConnectionSnapshot _connectionSnapshot =
       SecureChatConnectionSnapshot(
@@ -1027,6 +1255,16 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
   String get _publicKey => _keyPair?.public ?? '';
   String get _privateKey => _keyPair?.private ?? '';
+
+  double _premiumDialogWidth(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    return min(width - 40, 430).clamp(280, 430).toDouble();
+  }
+
+  EdgeInsets _floatingSnackMargin(BuildContext context) {
+    final bottomSafe = MediaQuery.of(context).padding.bottom;
+    return EdgeInsets.fromLTRB(18, 0, 18, 108 + bottomSafe);
+  }
 
   @override
   void initState() {
@@ -1115,8 +1353,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
   }
 
   Future<void> _loadOrCreateKeys() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedPrivateKey = prefs.getString(_privateKeyStorageKey);
+    final savedPrivateKey = await SecureKeyStorageService.readPrivateKey();
 
     if (savedPrivateKey != null && savedPrivateKey.trim().isNotEmpty) {
       _keyPair = _nostr.keys.generateKeyPairFromExistingPrivateKey(
@@ -1124,7 +1361,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
       );
     } else {
       final newPair = _nostr.keys.generateKeyPair();
-      await prefs.setString(_privateKeyStorageKey, newPair.private);
+      await SecureKeyStorageService.writePrivateKey(newPair.private);
       _keyPair = newPair;
     }
   }
@@ -1250,6 +1487,24 @@ class _VaultChatRootState extends State<VaultChatRoot>
     await Clipboard.setData(ClipboardData(text: _publicKey));
     if (!mounted) return;
     _showSnackBar('ID copiat in clipboard!');
+  }
+
+  Future<void> _copySensitiveBackupToClipboard(String value) async {
+    await Clipboard.setData(ClipboardData(text: value));
+    _lastSensitiveClipboardValue = value;
+    _clipboardClearTimer?.cancel();
+    _clipboardClearTimer = Timer(_sensitiveClipboardTtl, () async {
+      try {
+        final current = await Clipboard.getData('text/plain');
+        if (current?.text == _lastSensitiveClipboardValue) {
+          await Clipboard.setData(const ClipboardData(text: ''));
+        }
+      } catch (_) {
+        // Clipboard clearing is best-effort only.
+      } finally {
+        _lastSensitiveClipboardValue = null;
+      }
+    });
   }
 
 
@@ -1534,206 +1789,91 @@ class _VaultChatRootState extends State<VaultChatRoot>
   }
 
 
-  // ─── EXPORT cheie privata ───────────────────────────────────────────────────
+  // ─── BACKUP CRIPTAT IDENTITATE ────────────────────────────────────────
 
-  void _showExportKeyDialog() {
-    // Pasul 1: avertizare
-    showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        scrollable: true,
-        icon: const Icon(Icons.warning_amber_rounded, color: SecureChatColors.danger),
-        title: const Text('Atentie!', textAlign: TextAlign.center, style: TextStyle(color: SecureChatColors.danger)),
-        content: const Text(
-          'Cheia privata este SECRETUL TAU ABSOLUT.\n\n'
-          'Nu o arata nimanui, niciodata.\n\n'
-          'Oricine o are poate citi toate conversatiile tale si se poate da drept tine.\n\n'
-          'Salveaz-o OFFLINE, intr-un loc sigur fizic.',
-          style: TextStyle(fontSize: 13, height: 1.5),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Anuleaza'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: SecureChatColors.danger,
-            ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Inteleg, arata cheia'),
-          ),
-        ],
-      ),
-    ).then((confirmed) {
-      if (confirmed != true) return;
-      if (!mounted) return;
-      // Pasul 2: afisare cheie
-      _showPrivateKeyRevealDialog();
-    });
-  }
+  static const String _identityBackupPrefix = 'VAULTCHAT_BACKUP_V1:';
+  static const int _identityBackupIterations = 210000;
 
-  void _showPrivateKeyRevealDialog() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        scrollable: true,
-        icon: const Icon(Icons.lock_open_rounded, color: SecureChatColors.danger),
-        title: const Text('Cheia ta privata', textAlign: TextAlign.center),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Copiaz-o si salveaz-o offline in siguranta:',
-              style: TextStyle(fontSize: 12, color: SecureChatColors.mutedText),
-            ),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: SecureChatColors.danger.withOpacity(0.10),
-                border: Border.all(color: SecureChatColors.danger.withOpacity(0.36)),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: SelectableText(
-                _privateKey,
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontFamily: 'monospace',
-                  color: SecureChatColors.text,
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: SecureChatColors.danger,
-                ),
-                onPressed: () async {
-                  await Clipboard.setData(
-                    ClipboardData(text: _privateKey),
-                  );
-                  if (!ctx.mounted) return;
-                  Navigator.pop(ctx);
-                  if (!mounted) return;
-                  _showSnackBar(
-                    'Cheie privata copiata! Salveaz-o offline imediat.',
-                    isError: true,
-                  );
-                },
-                icon: const Icon(Icons.copy),
-                label: const Text('Copiaza cheia privata'),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Inchide'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ─── IMPORT (Restore) cheie privata ────────────────────────────────────────
-
-  Future<void> _showRestoreKeyDialog() async {
-    final controller = TextEditingController();
+  Future<void> _showExportKeyDialog() async {
+    final passwordController = TextEditingController();
+    final confirmController = TextEditingController();
+    bool obscure = true;
 
     try {
-      final privateKey = await showDialog<String>(
+      final password = await showDialog<String>(
         context: context,
         builder: (dialogContext) {
           return StatefulBuilder(
             builder: (context, setDialogState) {
-              final text = controller.text.trim();
-              final isValid = _isValidPrivateKey(text);
-              final length = text.length;
+              final password = passwordController.text;
+              final confirm = confirmController.text;
+              final isValid = password.length >= 8 && password == confirm;
 
               return AlertDialog(
-        scrollable: true,
-                icon: const Icon(Icons.restore, size: 32),
+                scrollable: true,
+                icon: const Icon(
+                  Icons.enhanced_encryption_rounded,
+                  color: SecureChatColors.turquoise,
+                ),
                 title: const Text(
-                  'Restaureaza contul',
+                  'Export identitate criptata',
                   textAlign: TextAlign.center,
                 ),
-                content: SingleChildScrollView(
+                content: SizedBox(
+                  width: _premiumDialogWidth(dialogContext),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Introdu cheia privata hex salvata anterior.',
-                        style: TextStyle(fontSize: 13),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: controller,
-                        maxLines: 2,
-                        minLines: 1,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontFamily: 'monospace',
+                  children: [
+                    const Text(
+                      'Se va crea un backup criptat pentru cheia privata si contactele locale. Salveaza textul generat intr-un loc sigur.',
+                      style: TextStyle(fontSize: 13, height: 1.45),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: passwordController,
+                      obscureText: obscure,
+                      decoration: InputDecoration(
+                        labelText: 'Parola backup',
+                        helperText: 'Min. 8 caractere. Nu este PIN-ul.',
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
+                          onPressed: () => setDialogState(() => obscure = !obscure),
                         ),
-                        decoration: InputDecoration(
-                          border: const OutlineInputBorder(),
-                          isDense: true,
-                          labelText: 'Cheie privata hex',
-                          suffixIcon: isValid
-                              ? const Icon(Icons.check_circle,
-                                  color: SecureChatColors.turquoise)
-                              : const Icon(Icons.error, color: SecureChatColors.danger),
-                        ),
-                        onChanged: (value) {
-                          final cleaned = value.replaceAll(
-                            RegExp(r'[^a-fA-F0-9]'),
-                            '',
-                          );
-                          if (cleaned != value) {
-                            controller.value = TextEditingValue(
-                              text: cleaned,
-                              selection: TextSelection.collapsed(
-                                offset: cleaned.length,
-                              ),
-                            );
-                          }
-                          setDialogState(() {});
-                        },
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '$length/64 caractere',
+                      onChanged: (_) => setDialogState(() {}),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: confirmController,
+                      obscureText: obscure,
+                      decoration: const InputDecoration(
+                        labelText: 'Confirma parola backup',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setDialogState(() {}),
+                    ),
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: SecureChatColors.warning.withOpacity(0.10),
+                        border: Border.all(
+                          color: SecureChatColors.warning.withOpacity(0.32),
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Text(
+                        'Daca pierzi parola backupului, cheia privata nu poate fi recuperata.',
                         style: TextStyle(
                           fontSize: 12,
-                          color: isValid ? SecureChatColors.turquoise : SecureChatColors.danger,
-                          fontWeight: FontWeight.w600,
+                          color: SecureChatColors.warning,
+                          height: 1.35,
                         ),
                       ),
-                      if (isValid) ...[
-                        const SizedBox(height: 8),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: SecureChatColors.warning.withOpacity(0.10),
-                            border: Border.all(color: SecureChatColors.warning.withOpacity(0.32)),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const Text(
-                            'Restaurarea va inlocui identitatea curenta si va reconecta aplicatia automat.',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: SecureChatColors.warning,
-                              height: 1.35,
-                            ),
-                          ),
-                        ),
-                      ],
+                    ),
                     ],
                   ),
                 ),
@@ -1742,11 +1882,15 @@ class _VaultChatRootState extends State<VaultChatRoot>
                     onPressed: () => Navigator.pop(dialogContext),
                     child: const Text('Anuleaza'),
                   ),
-                  FilledButton(
+                  FilledButton.icon(
                     onPressed: isValid
-                        ? () => Navigator.pop(dialogContext, text)
+                        ? () {
+                            FocusManager.instance.primaryFocus?.unfocus();
+                            Navigator.of(dialogContext, rootNavigator: true).pop(password);
+                          }
                         : null,
-                    child: const Text('Restaureaza'),
+                    icon: const Icon(Icons.lock_rounded),
+                    label: const Text('Genereaza backup'),
                   ),
                 ],
               );
@@ -1755,15 +1899,364 @@ class _VaultChatRootState extends State<VaultChatRoot>
         },
       );
 
-      if (privateKey != null && _isValidPrivateKey(privateKey)) {
-        await _restorePrivateKey(privateKey.trim());
+      if (password == null || password.isEmpty) return;
+
+      // Let the password dialog finish disposing before generating and opening
+      // the next route. This avoids Flutter overlay/focus assertion failures
+      // on some Android builds when the keyboard is still active.
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+      if (!mounted) return;
+
+      try {
+        final backupText = await _createEncryptedIdentityBackup(password);
+        if (!mounted) return;
+        await Clipboard.setData(ClipboardData(text: backupText));
+        if (!mounted) return;
+        await _showEncryptedBackupResultDialog(backupText);
+      } catch (e) {
+        if (!mounted) return;
+        _showSnackBar('Nu s-a putut genera backupul: $e', isError: true);
       }
     } finally {
-      controller.dispose();
+      passwordController.dispose();
+      confirmController.dispose();
     }
   }
 
-  Future<void> _restorePrivateKey(String privateKey) async {
+  Future<String> _createEncryptedIdentityBackup(String password) async {
+    final privateKey = _privateKey.trim();
+    final publicKey = _publicKey.trim().toLowerCase();
+    if (!_isValidPrivateKey(privateKey) || !_isValidPublicKey(publicKey)) {
+      throw StateError('Identitatea curenta nu este valida pentru export.');
+    }
+
+    final contacts = await _contactService?.loadContacts() ?? <ContactModel>[];
+    final storageSnapshot = await _storageService?.exportBackupSnapshot(
+          myPublicKey: publicKey,
+        ) ??
+        const <String, dynamic>{
+          'schema': 1,
+          'messages': <Map<String, dynamic>>[],
+          'conversations': <Map<String, dynamic>>[],
+        };
+
+    final plaintextMap = <String, dynamic>{
+      'type': 'vaultchat_identity',
+      'version': 3,
+      'createdAt': DateTime.now().toIso8601String(),
+      'publicKey': publicKey,
+      'privateKey': privateKey,
+      'contacts': contacts.map((contact) => contact.toMap()).toList(),
+      'storage': storageSnapshot,
+    };
+
+    final plaintext = utf8.encode(jsonEncode(plaintextMap));
+    final salt = _secureRandomBytes(16);
+    final nonce = _secureRandomBytes(12);
+    final secretKey = await _deriveBackupSecretKey(
+      password,
+      salt,
+      _identityBackupIterations,
+    );
+    final algorithm = cryptography.AesGcm.with256bits();
+    final secretBox = await algorithm.encrypt(
+      plaintext,
+      secretKey: secretKey,
+      nonce: nonce,
+    );
+
+    final container = <String, dynamic>{
+      'type': 'vaultchat_encrypted_identity_backup',
+      'version': 2,
+      'algorithm': 'aes-256-gcm',
+      'kdf': 'pbkdf2-hmac-sha256',
+      'iterations': _identityBackupIterations,
+      'salt': base64Encode(salt),
+      'nonce': base64Encode(secretBox.nonce),
+      'cipher': base64Encode(secretBox.cipherText),
+      'mac': base64Encode(secretBox.mac.bytes),
+      'createdAt': DateTime.now().toIso8601String(),
+      'publicKeyHint': publicKey.substring(0, 8),
+    };
+
+    return '$_identityBackupPrefix${base64Encode(utf8.encode(jsonEncode(container)))}';
+  }
+
+  Future<void> _showEncryptedBackupResultDialog(String backupText) async {
+    final backupTextController = TextEditingController(text: backupText);
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          scrollable: true,
+          icon: const Icon(Icons.security_rounded, color: SecureChatColors.turquoise),
+          title: const Text('Backup criptat generat', textAlign: TextAlign.center),
+          content: SizedBox(
+            width: _premiumDialogWidth(ctx),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Backupul a fost copiat automat in clipboard pentru 90 secunde. Copiaza-l intr-un loc offline sigur. Pentru restaurare vei avea nevoie de parola backupului.',
+                style: TextStyle(fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: backupTextController,
+                readOnly: true,
+                maxLines: 5,
+                minLines: 3,
+                style: const TextStyle(fontSize: 9.5, height: 1.22, fontFamily: 'monospace'),
+                decoration: InputDecoration(
+                  labelText: 'Backup criptat VaultChat',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    tooltip: 'Copiaza',
+                    icon: const Icon(Icons.copy_rounded),
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: backupText));
+                      if (!ctx.mounted) return;
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        const SnackBar(content: Text('Backup copiat temporar in clipboard.')),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: SecureChatColors.warning.withOpacity(0.10),
+                  border: Border.all(color: SecureChatColors.warning.withOpacity(0.28)),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Text(
+                  'Nu trimite acest backup altor persoane. Clipboard-ul va fi curatat automat dupa 90 secunde, daca textul nu a fost inlocuit de altceva.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: SecureChatColors.warning,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx, rootNavigator: true).pop(),
+              child: const Text('Inchide'),
+            ),
+            FilledButton.icon(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: backupText));
+                if (!ctx.mounted) return;
+                Navigator.of(ctx, rootNavigator: true).pop();
+                if (!mounted) return;
+                _showSnackBar('Backup criptat copiat temporar in clipboard. Salveaza-l offline.');
+              },
+              icon: const Icon(Icons.copy_rounded),
+              label: const Text('Copiaza si inchide'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      backupTextController.dispose();
+    }
+  }
+
+  // ─── IMPORT BACKUP CRIPTAT / RESTORE IDENTITATE ────────────────────────────
+
+  Future<void> _showRestoreKeyDialog() async {
+    final result = await showDialog<_IdentityRestoreRequest>(
+      context: context,
+      builder: (dialogContext) => _RestoreIdentityDialog(
+        identityBackupPrefix: _identityBackupPrefix,
+        dialogWidth: _premiumDialogWidth(dialogContext),
+        isValidPrivateKey: _isValidPrivateKey,
+      ),
+    );
+
+    if (result == null) return;
+
+    // Wait for the restore dialog, keyboard and focus tree to dispose cleanly
+    // before mutating app identity/storage. This prevents Flutter
+    // `_dependents.isEmpty` assertion crashes on Android after paste/restore.
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Future<void>.delayed(const Duration(milliseconds: 220));
+    if (!mounted) return;
+
+    await _restoreIdentityFromPayload(result.payload, result.password);
+  }
+
+  Future<void> _restoreIdentityFromPayload(String payload, String password) async {
+    try {
+      final cleanPayload = _normalizeVaultChatRestorePayload(payload);
+      if (_isValidPrivateKey(cleanPayload)) {
+        await _restorePrivateKey(cleanPayload);
+        return;
+      }
+
+      final restored = await _decryptIdentityBackup(cleanPayload, password);
+      await _restorePrivateKey(
+        restored.privateKey,
+        restoredContacts: restored.contacts,
+        restoredMessages: restored.messages,
+        restoredConversations: restored.conversations,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showSnackBar('Backup invalid sau parola gresita.', isError: true);
+    }
+  }
+
+  Future<_RestoredIdentityBackup> _decryptIdentityBackup(
+    String backupText,
+    String password,
+  ) async {
+    if (!backupText.startsWith(_identityBackupPrefix)) {
+      throw const FormatException('Prefix invalid');
+    }
+
+    final encoded = backupText.substring(_identityBackupPrefix.length).trim();
+    final containerText = utf8.decode(base64Decode(encoded));
+    final container = jsonDecode(containerText);
+    if (container is! Map) throw const FormatException('Container invalid');
+
+    final version = (container['version'] as num?)?.toInt();
+    if (version == 2) {
+      return _decryptIdentityBackupV2(container, password);
+    }
+    if (version == 1) {
+      return _decryptIdentityBackupV1Legacy(container, password);
+    }
+
+    throw const FormatException('Versiune backup nesuportata');
+  }
+
+  Future<_RestoredIdentityBackup> _decryptIdentityBackupV2(
+    Map container,
+    String password,
+  ) async {
+    final iterations =
+        (container['iterations'] as num?)?.toInt() ?? _identityBackupIterations;
+    final salt = base64Decode(container['salt'] as String);
+    final nonce = base64Decode(container['nonce'] as String);
+    final cipherBytes = base64Decode(container['cipher'] as String);
+    final macBytes = base64Decode(container['mac'] as String);
+
+    final secretKey = await _deriveBackupSecretKey(password, salt, iterations);
+    final algorithm = cryptography.AesGcm.with256bits();
+    final plainBytes = await algorithm.decrypt(
+      cryptography.SecretBox(
+        cipherBytes,
+        nonce: nonce,
+        mac: cryptography.Mac(macBytes),
+      ),
+      secretKey: secretKey,
+    );
+
+    return _parseRestoredIdentityPlaintext(plainBytes);
+  }
+
+  _RestoredIdentityBackup _decryptIdentityBackupV1Legacy(
+    Map container,
+    String password,
+  ) {
+    final iterations =
+        (container['iterations'] as num?)?.toInt() ?? _identityBackupIterations;
+    final salt = base64Decode(container['salt'] as String);
+    final nonce = base64Decode(container['nonce'] as String);
+    final cipherBytes = base64Decode(container['cipher'] as String);
+    final expectedMac = base64Decode(container['mac'] as String);
+
+    final key = _deriveBackupKeyLegacy(password, salt, iterations);
+    final actualMac = _backupMacLegacy(key, nonce, cipherBytes);
+    if (!_constantTimeEquals(expectedMac, actualMac)) {
+      throw const FormatException('MAC invalid');
+    }
+
+    final plainBytes = _xorWithKeyStreamLegacy(cipherBytes, key, nonce);
+    return _parseRestoredIdentityPlaintext(plainBytes);
+  }
+
+  _RestoredIdentityBackup _parseRestoredIdentityPlaintext(List<int> plainBytes) {
+    final plain = jsonDecode(utf8.decode(plainBytes));
+    if (plain is! Map) throw const FormatException('Plaintext invalid');
+
+    final privateKey = (plain['privateKey'] ?? '').toString().trim();
+    final publicKey = (plain['publicKey'] ?? '').toString().trim().toLowerCase();
+    if (!_isValidPrivateKey(privateKey) || !_isValidPublicKey(publicKey)) {
+      throw const FormatException('Chei invalide');
+    }
+
+    final contactsRaw = plain['contacts'];
+    final contacts = <ContactModel>[];
+    if (contactsRaw is List) {
+      for (final item in contactsRaw) {
+        if (item is Map) {
+          final contact = ContactModel.fromMap(item);
+          if (contact.publicKey.trim().isNotEmpty &&
+              contact.displayName.trim().isNotEmpty) {
+            contacts.add(contact);
+          }
+        }
+      }
+    }
+
+    final restoredMessages = <MessageModel>[];
+    final restoredConversations = <ConversationModel>[];
+    final storageRaw = plain['storage'];
+    if (storageRaw is Map) {
+      final messagesRaw = storageRaw['messages'];
+      if (messagesRaw is List) {
+        for (final item in messagesRaw) {
+          if (item is Map) {
+            final message = MessageModel.fromMap(item);
+            if (message.id.trim().isNotEmpty &&
+                message.text.trim().isNotEmpty &&
+                message.senderPublicKey.trim().isNotEmpty &&
+                message.recipientPublicKey.trim().isNotEmpty) {
+              restoredMessages.add(message);
+            }
+          }
+        }
+      }
+
+      final conversationsRaw = storageRaw['conversations'];
+      if (conversationsRaw is List) {
+        for (final item in conversationsRaw) {
+          if (item is Map) {
+            final conversation = ConversationModel.fromMap(item);
+            if (conversation.id.trim().isNotEmpty &&
+                conversation.myPublicKey.trim().isNotEmpty &&
+                conversation.peerPublicKey.trim().isNotEmpty) {
+              restoredConversations.add(conversation);
+            }
+          }
+        }
+      }
+    }
+
+    return _RestoredIdentityBackup(
+      privateKey: privateKey,
+      contacts: contacts,
+      messages: restoredMessages,
+      conversations: restoredConversations,
+    );
+  }
+
+  Future<void> _restorePrivateKey(
+    String privateKey, {
+    List<ContactModel> restoredContacts = const <ContactModel>[],
+    List<MessageModel> restoredMessages = const <MessageModel>[],
+    List<ConversationModel> restoredConversations = const <ConversationModel>[],
+  }) async {
     try {
       final restoredPair = _nostr.keys
           .generateKeyPairFromExistingPrivateKey(privateKey.trim());
@@ -1773,19 +2266,127 @@ class _VaultChatRootState extends State<VaultChatRoot>
         return;
       }
 
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_privateKeyStorageKey, privateKey.trim());
+      await SecureKeyStorageService.writePrivateKey(privateKey.trim());
 
       _keyPair = restoredPair;
+
+      if (restoredContacts.isNotEmpty) {
+        _contactService ??= await ContactStorageService.open();
+        for (final contact in restoredContacts) {
+          await _contactService?.upsertContact(
+            publicKey: contact.publicKey,
+            displayName: contact.displayName,
+          );
+        }
+      }
+
+      if (restoredMessages.isNotEmpty || restoredConversations.isNotEmpty) {
+        _storageService ??= await ConversationStorageService.open();
+        await _storageService?.restoreBackupSnapshot(
+          messages: restoredMessages,
+          conversations: restoredConversations,
+          replaceExisting: true,
+        );
+      }
+
       await _restartConnectionForCurrentIdentity();
       await _reloadConversations();
 
       if (!mounted) return;
-      _showSnackBar('Identitate restaurata si reconectata cu succes.');
+
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+
+      if (!mounted) return;
+
+      _showSnackBar(
+        restoredMessages.isNotEmpty
+            ? 'Identitate, contacte si mesaje restaurate cu succes.'
+            : restoredContacts.isEmpty
+                ? 'Identitate restaurata si reconectata cu succes.'
+                : 'Identitate si contacte restaurate cu succes.',
+      );
     } catch (e) {
       if (!mounted) return;
       _showSnackBar('Cheie invalida: $e', isError: true);
     }
+  }
+
+  List<int> _secureRandomBytes(int length) {
+    final random = Random.secure();
+    return List<int>.generate(length, (_) => random.nextInt(256));
+  }
+
+  Future<cryptography.SecretKey> _deriveBackupSecretKey(
+    String password,
+    List<int> salt,
+    int iterations,
+  ) {
+    final pbkdf2 = cryptography.Pbkdf2(
+      macAlgorithm: cryptography.Hmac.sha256(),
+      iterations: iterations,
+      bits: 256,
+    );
+
+    return pbkdf2.deriveKey(
+      secretKey: cryptography.SecretKey(utf8.encode(password)),
+      nonce: salt,
+    );
+  }
+
+  List<int> _deriveBackupKeyLegacy(String password, List<int> salt, int iterations) {
+    final passwordBytes = utf8.encode(password);
+    final hmac = Hmac(sha256, passwordBytes);
+    final blockIndex = <int>[0, 0, 0, 1];
+    var u = hmac.convert(<int>[...salt, ...blockIndex]).bytes;
+    final output = List<int>.from(u);
+
+    for (var i = 1; i < iterations; i++) {
+      u = hmac.convert(u).bytes;
+      for (var j = 0; j < output.length; j++) {
+        output[j] ^= u[j];
+      }
+    }
+
+    return output;
+  }
+
+  List<int> _xorWithKeyStreamLegacy(List<int> input, List<int> key, List<int> nonce) {
+    final output = <int>[];
+    var counter = 0;
+
+    while (output.length < input.length) {
+      final counterBytes = <int>[
+        (counter >> 24) & 0xff,
+        (counter >> 16) & 0xff,
+        (counter >> 8) & 0xff,
+        counter & 0xff,
+      ];
+      final stream = Hmac(sha256, key).convert(<int>[...nonce, ...counterBytes]).bytes;
+      for (final byte in stream) {
+        if (output.length >= input.length) break;
+        output.add(input[output.length] ^ byte);
+      }
+      counter++;
+    }
+
+    return output;
+  }
+
+  List<int> _backupMacLegacy(List<int> key, List<int> nonce, List<int> cipherBytes) {
+    return Hmac(sha256, key).convert(<int>[
+      ...utf8.encode('vaultchat-backup-v1'),
+      ...nonce,
+      ...cipherBytes,
+    ]).bytes;
+  }
+
+  bool _constantTimeEquals(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a[i] ^ b[i];
+    }
+    return diff == 0;
   }
 
   // ─── DIALOG IDENTITATE (cu toate optiunile) ────────────────────────────────
@@ -1797,9 +2398,11 @@ class _VaultChatRootState extends State<VaultChatRoot>
         scrollable: true,
         icon: const Icon(Icons.key_rounded, color: SecureChatColors.violetSoft),
         title: const Text('Identitatea ta', textAlign: TextAlign.center),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+        content: SizedBox(
+          width: _premiumDialogWidth(ctx),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // ── Cheie publica ──
             const Text(
@@ -1815,8 +2418,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
               ),
               child: SelectableText(
                 _publicKey,
-                style:
-                    const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                style: const TextStyle(fontSize: 10.5, height: 1.25, fontFamily: 'monospace'),
               ),
             ),
             const SizedBox(height: 10),
@@ -1871,7 +2473,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
                   _showExportKeyDialog();
                 },
                 icon: const Icon(Icons.download),
-                label: const Text('Exporta cheia privata'),
+                label: const Text('Exporta backup criptat'),
               ),
             ),
             const SizedBox(height: 8),
@@ -1886,7 +2488,8 @@ class _VaultChatRootState extends State<VaultChatRoot>
                 label: const Text('Restaureaza identitatea'),
               ),
             ),
-          ],
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -1922,11 +2525,18 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
   void _showSnackBar(String message, {bool isError = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
       SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? SecureChatColors.danger : null,
-        duration: const Duration(seconds: 4),
+        content: Text(
+          message,
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        backgroundColor: isError ? SecureChatColors.danger : SecureChatColors.cardAlt,
+        behavior: SnackBarBehavior.floating,
+        margin: _floatingSnackMargin(context),
+        duration: Duration(seconds: isError ? 5 : 3),
       ),
     );
   }
@@ -1947,6 +2557,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
     _incomingMessageSubscription?.cancel();
     _remoteCommandSubscription?.cancel();
     _globalExpiryTimer?.cancel();
+    _clipboardClearTimer?.cancel();
     unawaited(_connectionService?.dispose());
     unawaited(_storageService?.close());
     unawaited(_contactService?.close());

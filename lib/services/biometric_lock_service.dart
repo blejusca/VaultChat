@@ -9,10 +9,15 @@ class BiometricLockService {
       final canCheck = await _auth.canCheckBiometrics;
       final biometrics = await _auth.getAvailableBiometrics();
 
-      if (!supported || (!canCheck && biometrics.isEmpty)) {
+      // SECURITY: VaultChat must never use Android device credential fallback
+      // (device PIN / pattern / password) as biometric unlock. Some Android builds
+      // can report `canCheckBiometrics == true` even when no biometric template is
+      // enrolled. In that case the app must hide the biometric button and require
+      // the local VaultChat PIN.
+      if (!supported || !canCheck || biometrics.isEmpty) {
         return const BiometricSupportState(
           isAvailable: false,
-          label: 'Biometria nu este disponibila pe acest dispozitiv.',
+          label: 'Biometria nu este configurata pe acest dispozitiv.',
         );
       }
 
@@ -28,12 +33,23 @@ class BiometricLockService {
 
   Future<bool> authenticate() async {
     try {
+      final supported = await _auth.isDeviceSupported();
+      final canCheck = await _auth.canCheckBiometrics;
+      final biometrics = await _auth.getAvailableBiometrics();
+
+      // SECURITY: do not start Android auth UI unless a real biometric method is
+      // enrolled. This prevents device PIN / password fallback and avoids stale
+      // platform-auth sessions being interpreted as a VaultChat unlock.
+      if (!supported || !canCheck || biometrics.isEmpty) {
+        return false;
+      }
+
       return await _auth.authenticate(
         localizedReason: 'Deblocheaza VaultChat pentru a accesa mesajele criptate.',
         options: const AuthenticationOptions(
-          stickyAuth: true,
-          biometricOnly: false,
-          useErrorDialogs: true,
+          stickyAuth: false,
+          biometricOnly: true,
+          useErrorDialogs: false,
         ),
       );
     } catch (_) {
