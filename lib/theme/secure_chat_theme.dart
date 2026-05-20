@@ -47,7 +47,7 @@ class SecureChatMotion {
 class SecureChatShadows {
   static List<BoxShadow> soft = [
     BoxShadow(
-      color: Colors.black.withOpacity(0.22),
+      color: Colors.black.withValues(alpha: 0.22),
       blurRadius: 18,
       offset: const Offset(0, 10),
     ),
@@ -55,7 +55,7 @@ class SecureChatShadows {
 
   static List<BoxShadow> card = [
     BoxShadow(
-      color: Colors.black.withOpacity(0.18),
+      color: Colors.black.withValues(alpha: 0.18),
       blurRadius: 24,
       offset: const Offset(0, 14),
     ),
@@ -63,7 +63,7 @@ class SecureChatShadows {
 
   static List<BoxShadow> subtleGlow = [
     BoxShadow(
-      color: SecureChatColors.violet.withOpacity(0.16),
+      color: SecureChatColors.violet.withValues(alpha: 0.16),
       blurRadius: 22,
       offset: const Offset(0, 10),
     ),
@@ -71,7 +71,7 @@ class SecureChatShadows {
 
   static List<BoxShadow> greenGlow = [
     BoxShadow(
-      color: SecureChatColors.turquoise.withOpacity(0.18),
+      color: SecureChatColors.turquoise.withValues(alpha: 0.18),
       blurRadius: 14,
     ),
   ];
@@ -225,7 +225,7 @@ class SecureChatTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: SecureChatColors.field.withOpacity(0.72),
+        fillColor: SecureChatColors.field.withValues(alpha: 0.72),
         hintStyle: const TextStyle(color: SecureChatColors.softText),
         labelStyle: const TextStyle(color: SecureChatColors.mutedText),
         contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 14),

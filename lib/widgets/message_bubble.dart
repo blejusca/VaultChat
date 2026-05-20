@@ -30,10 +30,10 @@ class MessageBubble extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
               decoration: BoxDecoration(
                 gradient: isMine ? SecureChatGradients.primary : null,
-                color: isMine ? null : SecureChatColors.cardAlt.withOpacity(0.88),
+                color: isMine ? null : SecureChatColors.cardAlt.withValues(alpha: 0.88),
                 border: isMine
                     ? null
-                    : Border.all(color: SecureChatColors.borderSoft.withOpacity(0.62)),
+                    : Border.all(color: SecureChatColors.borderSoft.withValues(alpha: 0.62)),
                 boxShadow: isMine ? SecureChatShadows.subtleGlow : null,
                 borderRadius: BorderRadius.only(
                   topLeft: const Radius.circular(21),
@@ -78,7 +78,7 @@ class MessageBubble extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 10.5,
                           color: isMine
-                              ? Colors.white.withOpacity(0.74)
+                              ? Colors.white.withValues(alpha: 0.74)
                               : SecureChatColors.softText,
                           fontWeight: FontWeight.w500,
                         ),
@@ -86,9 +86,9 @@ class MessageBubble extends StatelessWidget {
                       if (isMine) ...[
                         const SizedBox(width: 4),
                         Icon(
-                          Icons.done_all_rounded,
+                          Icons.done_rounded,
                           size: 13,
-                          color: Colors.white.withOpacity(0.74),
+                          color: Colors.white.withValues(alpha: 0.74),
                         ),
                       ],
                     ],
@@ -131,8 +131,8 @@ class _Avatar extends StatelessWidget {
       child: Container(
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: SecureChatColors.deepNavy.withOpacity(0.18),
-          border: Border.all(color: Colors.white.withOpacity(0.16)),
+          color: SecureChatColors.deepNavy.withValues(alpha: 0.18),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
         ),
         child: Center(
           child: Text(

@@ -220,6 +220,7 @@ class NostrConnectionService {
           kinds: [4],
           limit: 300,
           since: DateTime.now().subtract(const Duration(days: 31)),
+          p: [publicKey],
         ),
       ],
     );

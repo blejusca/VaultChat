@@ -271,12 +271,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                       ),
                       decoration: BoxDecoration(
                         color: isSelected
-                            ? SecureChatColors.violet.withOpacity(0.18)
+                            ? SecureChatColors.violet.withValues(alpha: 0.18)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(SecureChatRadius.md),
                         border: Border.all(
                           color: isSelected
-                              ? SecureChatColors.violet.withOpacity(0.55)
+                              ? SecureChatColors.violet.withValues(alpha: 0.55)
                               : Colors.transparent,
                         ),
                       ),
@@ -319,7 +319,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 const SizedBox(height: 10),
                 Divider(
                   height: 24,
-                  color: SecureChatColors.borderSoft.withOpacity(0.65),
+                  color: SecureChatColors.borderSoft.withValues(alpha: 0.65),
                 ),
                 InkWell(
                   borderRadius: BorderRadius.circular(SecureChatRadius.md),
@@ -336,9 +336,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(SecureChatRadius.md),
                       border: Border.all(
-                        color: SecureChatColors.danger.withOpacity(0.42),
+                        color: SecureChatColors.danger.withValues(alpha: 0.42),
                       ),
-                      color: SecureChatColors.danger.withOpacity(0.08),
+                      color: SecureChatColors.danger.withValues(alpha: 0.08),
                     ),
                     child: const Row(
                       children: [
@@ -884,9 +884,9 @@ class _EncryptedNotice extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 16),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
-          color: SecureChatColors.cardAlt.withOpacity(0.72),
+          color: SecureChatColors.cardAlt.withValues(alpha: 0.72),
           borderRadius: BorderRadius.circular(SecureChatRadius.md),
-          border: Border.all(color: SecureChatColors.borderSoft.withOpacity(0.62)),
+          border: Border.all(color: SecureChatColors.borderSoft.withValues(alpha: 0.62)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -958,9 +958,9 @@ class _Composer extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
           decoration: BoxDecoration(
-            color: SecureChatColors.card.withOpacity(0.86),
+            color: SecureChatColors.card.withValues(alpha: 0.86),
             borderRadius: BorderRadius.circular(SecureChatRadius.xxl),
-            border: Border.all(color: SecureChatColors.borderSoft.withOpacity(0.62)),
+            border: Border.all(color: SecureChatColors.borderSoft.withValues(alpha: 0.62)),
             boxShadow: SecureChatShadows.card,
           ),
           child: Row(
@@ -1049,10 +1049,10 @@ class _EmptyChat extends StatelessWidget {
                 constraints: const BoxConstraints(maxWidth: 430),
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
                 decoration: BoxDecoration(
-                  color: SecureChatColors.cardAlt.withOpacity(0.76),
+                  color: SecureChatColors.cardAlt.withValues(alpha: 0.76),
                   borderRadius: BorderRadius.circular(SecureChatRadius.xl),
                   border: Border.all(
-                    color: SecureChatColors.borderSoft.withOpacity(0.62),
+                    color: SecureChatColors.borderSoft.withValues(alpha: 0.62),
                   ),
                 ),
                 child: Column(

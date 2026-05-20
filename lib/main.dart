@@ -555,7 +555,7 @@ class _PinEntryScreen extends StatelessWidget {
                         width: 78,
                         height: 78,
                         decoration: BoxDecoration(
-                          color: SecureChatColors.violet.withOpacity(0.16),
+                          color: SecureChatColors.violet.withValues(alpha: 0.16),
                           shape: BoxShape.circle,
                           boxShadow: SecureChatShadows.subtleGlow,
                         ),
@@ -643,7 +643,7 @@ class _PinEntryScreen extends StatelessWidget {
                           vertical: 13,
                         ),
                         side: BorderSide(
-                          color: SecureChatColors.violetBright.withOpacity(0.55),
+                          color: SecureChatColors.violetBright.withValues(alpha: 0.55),
                         ),
                       ),
                     ),
@@ -748,7 +748,7 @@ class _PinKeyboard extends StatelessWidget {
       width: 64,
       height: 64,
       child: Material(
-        color: SecureChatColors.cardAlt.withOpacity(0.82),
+        color: SecureChatColors.cardAlt.withValues(alpha: 0.82),
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),
@@ -892,7 +892,7 @@ class _ContactEntrySheetState extends State<_ContactEntrySheet> {
                       width: 42,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: SecureChatColors.borderSoft.withOpacity(0.8),
+                        color: SecureChatColors.borderSoft.withValues(alpha: 0.8),
                         borderRadius: BorderRadius.circular(999),
                       ),
                     ),
@@ -905,7 +905,7 @@ class _ContactEntrySheetState extends State<_ContactEntrySheet> {
                         height: 42,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: SecureChatColors.violet.withOpacity(0.16),
+                          color: SecureChatColors.violet.withValues(alpha: 0.16),
                         ),
                         child: const Icon(
                           Icons.person_add_alt_1_rounded,
@@ -1173,9 +1173,9 @@ class _RestoreIdentityDialogState extends State<_RestoreIdentityDialog> {
               width: double.infinity,
               padding: const EdgeInsets.all(9),
               decoration: BoxDecoration(
-                color: SecureChatColors.warning.withOpacity(0.10),
+                color: SecureChatColors.warning.withValues(alpha: 0.10),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: SecureChatColors.warning.withOpacity(0.28)),
+                border: Border.all(color: SecureChatColors.warning.withValues(alpha: 0.28)),
               ),
               child: const Text(
                 'Restaurarea inlocuieste identitatea curenta si reconecteaza aplicatia.',
@@ -1859,9 +1859,9 @@ class _VaultChatRootState extends State<VaultChatRoot>
                       width: double.infinity,
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: SecureChatColors.warning.withOpacity(0.10),
+                        color: SecureChatColors.warning.withValues(alpha: 0.10),
                         border: Border.all(
-                          color: SecureChatColors.warning.withOpacity(0.32),
+                          color: SecureChatColors.warning.withValues(alpha: 0.32),
                         ),
                         borderRadius: BorderRadius.circular(10),
                       ),
@@ -2030,8 +2030,8 @@ class _VaultChatRootState extends State<VaultChatRoot>
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: SecureChatColors.warning.withOpacity(0.10),
-                  border: Border.all(color: SecureChatColors.warning.withOpacity(0.28)),
+                  color: SecureChatColors.warning.withValues(alpha: 0.10),
+                  border: Border.all(color: SecureChatColors.warning.withValues(alpha: 0.28)),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Text(
@@ -2413,7 +2413,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: SecureChatColors.cardAlt.withOpacity(0.72),
+                color: SecureChatColors.cardAlt.withValues(alpha: 0.72),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: SelectableText(
@@ -2466,7 +2466,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
               child: OutlinedButton.icon(
                 style: OutlinedButton.styleFrom(
                   foregroundColor: SecureChatColors.danger,
-                  side: BorderSide(color: SecureChatColors.danger.withOpacity(0.55)),
+                  side: BorderSide(color: SecureChatColors.danger.withValues(alpha: 0.55)),
                 ),
                 onPressed: () {
                   Navigator.pop(ctx);

@@ -47,7 +47,7 @@ class BiometricLockService {
       return await _auth.authenticate(
         localizedReason: 'Deblocheaza VaultChat pentru a accesa mesajele criptate.',
         options: const AuthenticationOptions(
-          stickyAuth: false,
+          stickyAuth: true,
           biometricOnly: true,
           useErrorDialogs: false,
         ),

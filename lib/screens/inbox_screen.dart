@@ -183,9 +183,9 @@ class _InboxHeader extends StatelessWidget {
             height: 48,
             padding: const EdgeInsets.symmetric(horizontal: 14),
             decoration: BoxDecoration(
-              color: SecureChatColors.card.withOpacity(0.68),
+              color: SecureChatColors.card.withValues(alpha: 0.68),
               borderRadius: BorderRadius.circular(SecureChatRadius.lg),
-              border: Border.all(color: SecureChatColors.borderSoft.withOpacity(0.72)),
+              border: Border.all(color: SecureChatColors.borderSoft.withValues(alpha: 0.72)),
             ),
             child: const Row(
               children: [
@@ -271,9 +271,9 @@ class _HeaderIconButton extends StatelessWidget {
             width: 43,
             height: 43,
             decoration: BoxDecoration(
-              color: SecureChatColors.card.withOpacity(0.72),
+              color: SecureChatColors.card.withValues(alpha: 0.72),
               shape: BoxShape.circle,
-              border: Border.all(color: SecureChatColors.borderSoft.withOpacity(0.65)),
+              border: Border.all(color: SecureChatColors.borderSoft.withValues(alpha: 0.65)),
             ),
             child: Icon(icon, color: SecureChatColors.mutedText, size: 21),
           ),
@@ -299,7 +299,7 @@ class _EmptyInbox extends StatelessWidget {
           decoration: BoxDecoration(
             gradient: SecureChatGradients.card,
             borderRadius: BorderRadius.circular(SecureChatRadius.xl),
-            border: Border.all(color: SecureChatColors.borderSoft.withOpacity(0.75)),
+            border: Border.all(color: SecureChatColors.borderSoft.withValues(alpha: 0.75)),
             boxShadow: SecureChatShadows.card,
           ),
           child: Column(
@@ -309,9 +309,9 @@ class _EmptyInbox extends StatelessWidget {
                 width: 74,
                 height: 74,
                 decoration: BoxDecoration(
-                  color: SecureChatColors.violet.withOpacity(0.13),
+                  color: SecureChatColors.violet.withValues(alpha: 0.13),
                   shape: BoxShape.circle,
-                  border: Border.all(color: SecureChatColors.violetBright.withOpacity(0.18)),
+                  border: Border.all(color: SecureChatColors.violetBright.withValues(alpha: 0.18)),
                 ),
                 child: const Icon(
                   Icons.lock_outline_rounded,
@@ -380,7 +380,7 @@ class _ConversationTile extends StatelessWidget {
           decoration: BoxDecoration(
             gradient: SecureChatGradients.card,
             borderRadius: BorderRadius.circular(SecureChatRadius.xl),
-            border: Border.all(color: SecureChatColors.borderSoft.withOpacity(0.62)),
+            border: Border.all(color: SecureChatColors.borderSoft.withValues(alpha: 0.62)),
             boxShadow: SecureChatShadows.soft,
           ),
           child: Row(
@@ -445,7 +445,7 @@ class _ConversationTile extends StatelessWidget {
                 width: 30,
                 height: 30,
                 decoration: BoxDecoration(
-                  color: SecureChatColors.cardSoft.withOpacity(0.72),
+                  color: SecureChatColors.cardSoft.withValues(alpha: 0.72),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
@@ -459,14 +459,7 @@ class _ConversationTile extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  static String _shortKey(String key) {
-    if (key.length >= 8) return key.substring(0, 8);
-    return key;
-  }
-
-  static String _formatTime(DateTime time) {
+  }static String _formatTime(DateTime time) {
     final now = DateTime.now();
     final sameDay = now.year == time.year &&
         now.month == time.month &&
@@ -502,8 +495,8 @@ class _Avatar extends StatelessWidget {
       child: Container(
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: SecureChatColors.deepNavy.withOpacity(0.10),
-          border: Border.all(color: Colors.white.withOpacity(0.18)),
+          color: SecureChatColors.deepNavy.withValues(alpha: 0.10),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
         ),
         child: Center(
           child: Text(
