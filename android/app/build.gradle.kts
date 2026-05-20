@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.nostr_basic_app"
+    namespace = "com.vaultchat.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 

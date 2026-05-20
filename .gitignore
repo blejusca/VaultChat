@@ -1,3 +1,4 @@
+# Flutter / Dart
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
@@ -5,9 +6,32 @@
 .pub-cache/
 .pub/
 build/
-android/local.properties
+coverage/
+
+# Android / Gradle
 android/.gradle/
-*.iml
+android/.kotlin/
+android/local.properties
+android/app/build/
+android/build/
+android/**/build/
+*.apk
+*.aab
+*.ap_
+
+# Generated Android plugin registrant
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+
+# IDE
 .idea/
 .vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs / temporary
+*.log
+android/.kotlin/errors/
 *.hprof

@@ -41,9 +41,6 @@ extension TtlOptionExtension on TtlOption {
       case TtlOption.thirtyDays:  return const Duration(days: 30);
     }
   }
-
-  // Cheia pentru SharedPreferences
-  String get prefKey => 'ttl_${name}';
 }
 
 class ChatScreen extends StatefulWidget {
