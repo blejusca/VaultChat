@@ -1,11 +1,7 @@
 import 'package:flutter/material.dart';
 
-import 'screens/pin_screen.dart';
-import 'theme/secure_chat_theme.dart';
-
-void main() {
-  runApp(const VaultChatApp());
-}
+import '../auth/pin_gate.dart';
+import '../theme/secure_chat_theme.dart';
 
 class VaultChatApp extends StatelessWidget {
   const VaultChatApp({super.key});

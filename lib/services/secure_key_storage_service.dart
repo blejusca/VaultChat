@@ -4,6 +4,8 @@ import 'dart:math';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// All sensitive secrets stored via Android Keystore / iOS Secure Enclave.
+/// Nothing sensitive lives in plain SharedPreferences.
 class SecureKeyStorageService {
   SecureKeyStorageService._();
 
@@ -13,9 +15,18 @@ class SecureKeyStorageService {
     ),
   );
 
-  static const String privateKeyKey = 'vaultchat_private_key_hex_v2';
-  static const String hiveAesKeyKey = 'vaultchat_hive_aes_key_v1';
+  // ── Private key ────────────────────────────────────────────────────────────
+  static const String privateKeyKey      = 'vaultchat_private_key_hex_v2';
   static const String legacyPrivateKeyKey = 'nostr_private_key_hex';
+
+  // ── Hive AES key ───────────────────────────────────────────────────────────
+  static const String hiveAesKeyKey = 'vaultchat_hive_aes_key_v1';
+
+  // ── PIN (hash + salt moved here from SharedPreferences) ────────────────────
+  static const String pinHashKey = 'vaultchat_pin_hash_v2';
+  static const String pinSaltKey = 'vaultchat_pin_salt_v2';
+
+  // ── Private key ────────────────────────────────────────────────────────────
 
   static Future<String?> readPrivateKey() async {
     final secureValue = await _secureStorage.read(key: privateKeyKey);
@@ -23,6 +34,7 @@ class SecureKeyStorageService {
       return secureValue.trim();
     }
 
+    // Migrate from legacy SharedPreferences location (v1 → v2).
     final prefs = await SharedPreferences.getInstance();
     final legacy = prefs.getString(legacyPrivateKeyKey)?.trim();
     if (legacy != null && legacy.isNotEmpty) {
@@ -49,6 +61,8 @@ class SecureKeyStorageService {
     await prefs.remove(legacyPrivateKeyKey);
   }
 
+  // ── Hive AES key ───────────────────────────────────────────────────────────
+
   static Future<List<int>> readOrCreateHiveAesKey() async {
     final stored = await _secureStorage.read(key: hiveAesKeyKey);
     if (stored != null && stored.trim().isNotEmpty) {
@@ -66,8 +80,41 @@ class SecureKeyStorageService {
     await _secureStorage.delete(key: hiveAesKeyKey);
   }
 
+  // ── PIN hash + salt ────────────────────────────────────────────────────────
+
+  static Future<String?> readPinHash() async {
+    return _secureStorage.read(key: pinHashKey);
+  }
+
+  static Future<String?> readPinSalt() async {
+    return _secureStorage.read(key: pinSaltKey);
+  }
+
+  static Future<void> writePinHashAndSalt({
+    required String hash,
+    required String salt,
+  }) async {
+    await _secureStorage.write(key: pinHashKey, value: hash);
+    await _secureStorage.write(key: pinSaltKey, value: salt);
+    // Clean up any legacy SharedPreferences pin data.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('secure_chat_pin_hash_v2');
+    await prefs.remove('secure_chat_pin_salt_v2');
+    await prefs.remove('secure_chat_pin_hash_v1');
+    await prefs.remove('secure_chat_pin_salt_v1');
+    await prefs.remove('secure_chat_pin');
+  }
+
+  static Future<void> deletePinHashAndSalt() async {
+    await _secureStorage.delete(key: pinHashKey);
+    await _secureStorage.delete(key: pinSaltKey);
+  }
+
+  // ── Wipe everything ────────────────────────────────────────────────────────
+
   static Future<void> deleteAllSecrets() async {
     await deletePrivateKey();
     await deleteHiveAesKey();
+    await deletePinHashAndSalt();
   }
 }

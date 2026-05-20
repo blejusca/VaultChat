@@ -6,32 +6,43 @@
 .pub-cache/
 .pub/
 build/
-coverage/
+*.hprof
+*.log
 
-# Android / Gradle
+# Android
 android/.gradle/
-android/.kotlin/
+android/captures/
+android/gradlew
+android/gradlew.bat
 android/local.properties
-android/app/build/
-android/build/
-android/**/build/
-*.apk
-*.aab
-*.ap_
+android/key.properties
+*.jks
+*.keystore
 
-# Generated Android plugin registrant
-android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+# iOS
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Pods/
+ios/Runner.xcworkspace/
+*.ipa
+*.dSYM.zip
+*.dSYM
 
 # IDE
 .idea/
 .vscode/
 *.iml
+*.ipr
+*.iws
 
-# OS files
+# macOS
 .DS_Store
-Thumbs.db
+**/.DS_Store
 
-# Logs / temporary
-*.log
-android/.kotlin/errors/
-*.hprof
+# Sensitive — never commit
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+
+# Generated
+pubspec.lock

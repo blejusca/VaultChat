@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    VaultChat: ALL backup mechanisms disabled.
+
+    Security model:
+    - Private key + Hive AES key + PIN hash/salt → Android Keystore via
+      FlutterSecureStorage (never included in any backup by OS design).
+    - SharedPreferences → contains only non-sensitive runtime state (attempt
+      counter, TTL preferences, last recipient). Excluded here as defence-in-depth.
+    - Hive encrypted boxes → excluded; useless without the Keystore AES key anyway.
+
+    Result: adb backup, Google Drive backup and device-transfer produce no
+    sensitive data even if the backup storage is later compromised.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="database"   path="." />
+        <exclude domain="file"       path="." />
+        <exclude domain="external"   path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="database"   path="." />
+        <exclude domain="file"       path="." />
+        <exclude domain="external"   path="." />
+    </device-transfer>
+</data-extraction-rules>

@@ -650,13 +650,19 @@ class NostrConnectionService {
   }
 
   bool _looksLikeProtocolPayload(String raw) {
-    final value = raw.trimLeft();
-    return value.startsWith('{') ||
-        value.startsWith(r'{"') ||
-        value.contains('"type"') ||
-        value.contains(r'"type"') ||
-        value.contains('conversation_delete') ||
-        value.contains('ttlSeconds');
+    // Only classify as protocol payload if JSON actually parses AND contains
+    // mandatory fields ('v' + 'type'). This prevents legitimate user messages
+    // that happen to start with '{' or contain '"type"' / 'ttlSeconds' text
+    // from being silently dropped.
+    final value = raw.trim();
+    if (!value.startsWith('{')) return false;
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is Map) {
+        return decoded.containsKey('v') && decoded.containsKey('type');
+      }
+    } catch (_) {}
+    return false;
   }
 
   void _startMaintenanceTimer() {
