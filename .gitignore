@@ -26,3 +26,5 @@ android/app/build/
 # OS
 .DS_Store
 Thumbs.db
+android/key.properties
+*.jks
