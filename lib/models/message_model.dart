@@ -67,16 +67,21 @@ class MessageModel {
           ? peerPublicKey
           : (isMine ? recipientPublicKey : senderPublicKey),
       createdAt: DateTime.fromMillisecondsSinceEpoch(
+        // Handle double values from Hive on older Android (e.g. Android 10)
         createdAtMillis is int
             ? createdAtMillis
-            : int.tryParse('$createdAtMillis') ?? 0,
+            : createdAtMillis is double
+                ? createdAtMillis.toInt()
+                : int.tryParse('$createdAtMillis') ?? 0,
       ),
       isFromRelay: map['isFromRelay'] == true,
       expiresAt: expiresAtMillis != null
           ? DateTime.fromMillisecondsSinceEpoch(
               expiresAtMillis is int
                   ? expiresAtMillis
-                  : int.tryParse('$expiresAtMillis') ?? 0,
+                  : expiresAtMillis is double
+                      ? expiresAtMillis.toInt()
+                      : int.tryParse('$expiresAtMillis') ?? 0,
             )
           : null,
     );

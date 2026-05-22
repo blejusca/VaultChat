@@ -1,0 +1,16 @@
+VaultChat release build fix
+
+Problem fixed:
+- The previous app-release.apk was most likely unsigned because release signingConfig was missing.
+- Android can show this as: "Aplicatia nu a fost instalata deoarece pachetul este nevalid."
+
+Change made:
+- android/app/build.gradle.kts now signs release-test APKs with the debug signing key:
+  signingConfig = signingConfigs.getByName("debug")
+
+What this means:
+- flutter build apk --release should produce an installable APK for phone testing.
+- R8/ProGuard remains enabled: isMinifyEnabled=true and isShrinkResources=true.
+
+Important for Google Play:
+- Before Play Store upload, replace debug signing with a real release keystore / upload key.

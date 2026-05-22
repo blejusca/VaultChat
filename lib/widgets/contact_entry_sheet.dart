@@ -20,6 +20,7 @@ class ContactEntrySheet extends StatefulWidget {
   final bool requireName;
 
   const ContactEntrySheet({
+    super.key,
     required this.title,
     required this.subtitle,
     required this.actionLabel,
@@ -175,6 +176,12 @@ class _ContactEntrySheetState extends State<ContactEntrySheet> {
                     focusNode: _keyFocusNode,
                     minLines: 1,
                     maxLines: 3,
+                    keyboardType: TextInputType.visiblePassword,
+                    enableSuggestions: false,
+                    autocorrect: false,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
+                    autofillHints: const <String>[],
                     textInputAction: TextInputAction.done,
                     // Sanitize on every change/paste: strip whitespace and
                     // cap at 512 chars so huge accidental pastes cannot flood

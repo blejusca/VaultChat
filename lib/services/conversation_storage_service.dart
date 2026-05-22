@@ -249,7 +249,9 @@ class ConversationStorageService {
       final expiresAt = DateTime.fromMillisecondsSinceEpoch(
         expiresAtMillis is int
             ? expiresAtMillis
-            : int.tryParse('$expiresAtMillis') ?? 0,
+            : expiresAtMillis is double
+                ? expiresAtMillis.toInt()
+                : int.tryParse('$expiresAtMillis') ?? 0,
       );
 
       if (now.isAfter(expiresAt)) {
@@ -401,7 +403,10 @@ class ConversationStorageService {
   }
 
   Future<List<ConversationModel>> loadConversations() async {
-    await sanitizeStorage();
+    // Note: sanitizeStorage() is intentionally NOT called here on every load.
+    // It runs once at open() and is called explicitly by the expiry timer.
+    // Calling it here caused a race condition after restore: restored conversations
+    // with expired messages would be immediately deleted before the UI could display them.
 
     final latestMessages = <String, MessageModel>{};
 
@@ -436,9 +441,29 @@ class ConversationStorageService {
       }
 
       final latest = latestMessages[canonicalId];
+
+      // Check if there are ANY messages (including expired) for this conversation.
+      // If all messages are expired but the conversation shell was recently saved
+      // (e.g. just restored from backup), keep it visible so the user can see it.
+      // The expiry timer will handle deletion of expired messages asynchronously.
+      final hasAnyMessage = _messagesBox.values.any((raw) {
+        if (raw is! Map) return false;
+        final msg = MessageModel.fromMap(raw);
+        final cid = _canonicalConversationId(
+          msg.senderPublicKey, msg.recipientPublicKey);
+        return cid == canonicalId;
+      });
+
+      // Keep the conversation shell if:
+      // - there are non-expired messages (latest != null), OR
+      // - there are any messages (even expired), OR
+      // - the shell itself exists with valid keys (contact still reachable)
+      // We never delete a valid conversation shell based on time alone.
+      final hasValidShell = _looksLikePublicKey(stored.peerPublicKey) &&
+          _looksLikePublicKey(stored.myPublicKey);
+
       final hasUsableLocalShell = latest == null &&
-          stored.lastMessageText.trim().isEmpty &&
-          DateTime.now().difference(stored.updatedAt).inMinutes <= 10;
+          (hasAnyMessage || hasValidShell);
 
       if (latest == null && !hasUsableLocalShell) {
         await _conversationsBox.delete(key);
@@ -628,7 +653,13 @@ class ConversationStorageService {
     }
 
     for (final conversationId in conversationIds) {
-      await _rebuildOrRemoveConversation(conversationId);
+      await _rebuildOrRemoveConversation(
+        conversationId,
+        // Preserve shells even when all messages are expired.
+        // The inbox will show the conversation with empty state rather than
+        // making it disappear, which is less confusing for the user.
+        preserveRecentEmptyShell: true,
+      );
     }
   }
 
@@ -709,11 +740,80 @@ class ConversationStorageService {
       );
     }
 
+    // Track which conversation IDs have messages so we can ensure
+    // the conversation shell exists even for expired messages.
+    final restoredConversationIds = <String>{};
+
     for (final message in messages) {
-      await saveMessage(message);
+      // Use direct box.put during restore to bypass shouldAcceptMessage filtering.
+      // We deliberately restore ALL non-tombstoned messages regardless of expiry —
+      // the global expiry timer will purge them at its next tick (within 30s).
+      if (message.id.trim().isEmpty) continue;
+      final canonicalId = _canonicalConversationId(
+        message.senderPublicKey,
+        message.recipientPublicKey,
+      );
+      if (canonicalId.isEmpty) continue;
+      final cleanMsg = _normalizeConversationId(message.conversationId) != canonicalId
+          ? message.copyWith(conversationId: canonicalId)
+          : message;
+      if (_isBlockedByTombstone(canonicalId, cleanMsg.createdAt)) continue;
+      await _messagesBox.put(cleanMsg.id, cleanMsg.toMap());
+      restoredConversationIds.add(canonicalId);
+      // Only upsert conversation from message if NOT expired —
+      // upsertConversationFromMessage skips expired messages and would leave
+      // the conversation shell missing if ALL messages are expired.
+      if (!cleanMsg.isExpired) {
+        await upsertConversationFromMessage(cleanMsg);
+      }
     }
 
-    await sanitizeStorage();
+    // Ensure conversation shells exist for conversations whose ALL messages
+    // are expired. Without this, the inbox would show nothing after restore
+    // until the next non-expired message arrives.
+    for (final conversationId in restoredConversationIds) {
+      final exists = _conversationsBox.get(conversationId);
+      if (exists == null) {
+        // No shell was created by upsertConversationFromMessage (all messages
+        // were expired). Create a minimal shell from the conversations list
+        // that was restored above so the peer is visible in the inbox.
+        final rawConv = _conversationsBox.keys
+            .where((k) => _normalizeConversationId(k.toString()) == conversationId)
+            .firstOrNull;
+        if (rawConv == null) {
+          // Create empty shell so inbox shows the conversation.
+          // Label will be resolved from contacts in _reloadConversations.
+          final firstMsg = messages.where((m) {
+            final cid = _canonicalConversationId(
+              m.senderPublicKey, m.recipientPublicKey);
+            return cid == conversationId;
+          }).firstOrNull;
+          if (firstMsg != null) {
+            final shell = ConversationModel(
+              id: conversationId,
+              myPublicKey: firstMsg.isMine
+                  ? firstMsg.senderPublicKey
+                  : firstMsg.recipientPublicKey,
+              peerPublicKey: firstMsg.peerPublicKey,
+              peerLabel: firstMsg.senderLabel.trim().isNotEmpty
+                  ? firstMsg.senderLabel
+                  : unknownContactLabel,
+              lastMessageText: firstMsg.text,
+              updatedAt: firstMsg.createdAt,
+              unreadCount: 0,
+            );
+            await _conversationsBox.put(conversationId, shell.toMap());
+          }
+        }
+      }
+    }
+
+    // Note: intentionally NOT calling sanitizeStorage() here.
+    // sanitizeStorage() would immediately delete restored messages whose TTL
+    // has expired (between backup creation and restore), causing conversations
+    // to flash briefly then disappear. The global expiry timer in VaultChatRoot
+    // runs every 30 seconds and will handle expired messages after the UI
+    // has had a chance to display the restored conversations.
   }
 
   Future<void> clearAll() async {
@@ -745,10 +845,13 @@ class ConversationStorageService {
           existing.peerPublicKey,
         );
 
+        // Only remove the shell if:
+        // 1. The canonical ID doesn't match (corrupt entry), OR
+        // 2. We are explicitly NOT asked to preserve shells
+        // Never remove based on age alone — the conversation contact is still
+        // valid even if all messages have expired or been deleted.
         final shouldRemoveEmptyShell = canonicalId != normalizedConversationId ||
-            !preserveRecentEmptyShell ||
-            (existing.lastMessageText.trim().isEmpty &&
-                DateTime.now().difference(existing.updatedAt).inMinutes > 10);
+            !preserveRecentEmptyShell;
 
         if (shouldRemoveEmptyShell) {
           await _conversationsBox.delete(normalizedConversationId);
@@ -776,9 +879,14 @@ class ConversationStorageService {
 
   DateTime? _createdAtFromRaw(Map<dynamic, dynamic> raw) {
     final createdAtMillis = raw['createdAtMillis'];
+    // Hive on older Android versions (e.g. Android 10) sometimes stores
+    // integer values as doubles (e.g. 1716298800000.0). Handle all numeric
+    // types to avoid silently deleting valid messages.
     final millis = createdAtMillis is int
         ? createdAtMillis
-        : int.tryParse('$createdAtMillis');
+        : createdAtMillis is double
+            ? createdAtMillis.toInt()
+            : int.tryParse('$createdAtMillis');
     if (millis == null || millis <= 0) return null;
     return DateTime.fromMillisecondsSinceEpoch(millis);
   }
@@ -788,7 +896,9 @@ class ConversationStorageService {
     if (expiresAtMillis == null) return null;
     final millis = expiresAtMillis is int
         ? expiresAtMillis
-        : int.tryParse('$expiresAtMillis');
+        : expiresAtMillis is double
+            ? expiresAtMillis.toInt()
+            : int.tryParse('$expiresAtMillis');
     if (millis == null || millis <= 0) return null;
     return DateTime.fromMillisecondsSinceEpoch(millis);
   }

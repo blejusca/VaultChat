@@ -12,6 +12,11 @@ class SecureKeyStorageService {
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage(
     aOptions: AndroidOptions(
       encryptedSharedPreferences: true,
+      // resetOnError: true ensures that if EncryptedSharedPreferences fails
+      // to decrypt (e.g. after factory reset or Keystore corruption on some
+      // Android 10/11 devices like Nokia 5.4), the storage resets gracefully
+      // instead of crashing. The user will need to restore from backup.
+      resetOnError: true,
     ),
   );
 
@@ -25,6 +30,12 @@ class SecureKeyStorageService {
   // ── PIN (hash + salt moved here from SharedPreferences) ────────────────────
   static const String pinHashKey = 'vaultchat_pin_hash_v2';
   static const String pinSaltKey = 'vaultchat_pin_salt_v2';
+
+  // ── Identity activation timestamp ──────────────────────────────────────────
+  // Tracks when the current identity was created or last restored.
+  // Used as the 'since' filter for relay subscriptions to prevent
+  // historical message replay after identity deletion and recreation.
+  static const String _identityActivatedAtKey = 'vaultchat_identity_activated_at_v1';
 
   // ── Private key ────────────────────────────────────────────────────────────
 
@@ -110,11 +121,34 @@ class SecureKeyStorageService {
     await _secureStorage.delete(key: pinSaltKey);
   }
 
+  // ── Identity activation timestamp ──────────────────────────────────────────
+
+  static Future<DateTime?> readIdentityActivatedAt() async {
+    final prefs = await SharedPreferences.getInstance();
+    final millis = prefs.getInt(_identityActivatedAtKey);
+    if (millis == null) return null;
+    return DateTime.fromMillisecondsSinceEpoch(millis);
+  }
+
+  static Future<void> writeIdentityActivatedAt(DateTime activatedAt) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+      _identityActivatedAtKey,
+      activatedAt.millisecondsSinceEpoch,
+    );
+  }
+
+  static Future<void> deleteIdentityActivatedAt() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_identityActivatedAtKey);
+  }
+
   // ── Wipe everything ────────────────────────────────────────────────────────
 
   static Future<void> deleteAllSecrets() async {
     await deletePrivateKey();
     await deleteHiveAesKey();
     await deletePinHashAndSalt();
+    await deleteIdentityActivatedAt();
   }
 }

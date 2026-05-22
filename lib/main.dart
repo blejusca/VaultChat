@@ -1,22 +1,28 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import 'screens/pin_screen.dart';
-import 'theme/secure_chat_theme.dart';
+import 'app/vault_chat_app.dart';
 
 void main() {
-  runApp(const VaultChatApp());
-}
+  // Catch Flutter framework errors and prevent them from crashing the app
+  // in release mode. In debug mode errors are still thrown normally.
+  FlutterError.onError = (FlutterErrorDetails details) {
+    if (kDebugMode) {
+      FlutterError.presentError(details);
+    }
+    // In release mode: swallow the error silently — no crash dialog exposed.
+  };
 
-class VaultChatApp extends StatelessWidget {
-  const VaultChatApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'VaultChat',
-      debugShowCheckedModeBanner: false,
-      theme: SecureChatTheme.dark(),
-      home: const PinGate(),
-    );
-  }
+  // Catch async errors not caught by Flutter framework
+  runZonedGuarded(
+    () => runApp(const VaultChatApp()),
+    (error, stack) {
+      if (kDebugMode) {
+        // ignore: avoid_print
+        debugPrint('Uncaught async error: $error\n$stack');
+      }
+    },
+  );
 }

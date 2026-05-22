@@ -103,6 +103,10 @@ class ContactStorageService {
     await _contactsBox.delete(_normalizeKey(publicKey));
   }
 
+  Future<void> clearAll() async {
+    await _contactsBox.clear();
+  }
+
   Future<void> close() async {
     await _contactsBox.close();
   }

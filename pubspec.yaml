@@ -2,7 +2,7 @@ name: vaultchat
 description: VaultChat private decentralized encrypted messenger.
 publish_to: "none"
 
-version: 1.0.0+1
+version: 0.8.3+8
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -20,6 +20,7 @@ dependencies:
   local_auth: ^2.3.0
   flutter_secure_storage: ^9.2.4
   cryptography: ^2.7.0
+  pointycastle: ^3.9.1
 
 dev_dependencies:
   flutter_test:

@@ -39,6 +39,7 @@ class _ContactEntrySheet extends StatefulWidget {
   final bool requireName;
 
   const _ContactEntrySheet({
+    super.key,
     required this.title,
     required this.subtitle,
     required this.actionLabel,
@@ -83,10 +84,12 @@ class _ContactEntrySheetState extends State<_ContactEntrySheet> {
 
   void _submit() {
     if (!_canSubmit) return;
+    final cleanKey = _extractPublicKey(_keyController.text);
+    if (cleanKey == null) return;
     Navigator.of(context).pop(
       _ContactDialogResult(
         displayName: _nameController.text.trim(),
-        publicKeyOrPayload: _keyController.text.trim(),
+        publicKeyOrPayload: cleanKey,
       ),
     );
   }
@@ -189,7 +192,26 @@ class _ContactEntrySheetState extends State<_ContactEntrySheet> {
                     focusNode: _keyFocusNode,
                     minLines: 1,
                     maxLines: 3,
+                    keyboardType: TextInputType.visiblePassword,
+                    enableSuggestions: false,
+                    autocorrect: false,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
+                    autofillHints: const <String>[],
                     textInputAction: TextInputAction.done,
+                    inputFormatters: [
+                      TextInputFormatter.withFunction((oldValue, newValue) {
+                        final cleaned = newValue.text.replaceAll(RegExp(r'\s+'), ' ').trimLeft();
+                        if (cleaned.length > 512) {
+                          final capped = cleaned.substring(0, 512);
+                          return newValue.copyWith(
+                            text: capped,
+                            selection: TextSelection.collapsed(offset: capped.length),
+                          );
+                        }
+                        return newValue.copyWith(text: cleaned);
+                      }),
+                    ],
                     onChanged: (_) => setState(() {}),
                     onSubmitted: (_) => _submit(),
                     style: const TextStyle(fontFamily: 'monospace', fontSize: 12.5),
@@ -466,7 +488,6 @@ class _VaultChatRootState extends State<VaultChatRoot>
   StreamSubscription<SecureChatConnectionSnapshot>? _statusSubscription;
   StreamSubscription<MessageModel>? _incomingMessageSubscription;
   StreamSubscription<RemoteConversationCommand>? _remoteCommandSubscription;
-  Timer? _globalExpiryTimer;
 
   bool _isLoading = true;
   String? _startupError;
@@ -533,7 +554,6 @@ class _VaultChatRootState extends State<VaultChatRoot>
           force: true,
         ),
       );
-      unawaited(_purgeExpiredMessagesAndReload());
       unawaited(_reloadConversations());
     }
   }
@@ -552,8 +572,6 @@ class _VaultChatRootState extends State<VaultChatRoot>
     _incomingMessageSubscription = null;
     await _remoteCommandSubscription?.cancel();
     _remoteCommandSubscription = null;
-    _globalExpiryTimer?.cancel();
-    _globalExpiryTimer = null;
     await _connectionService?.dispose();
     _connectionService = null;
     await _storageService?.close();
@@ -574,8 +592,6 @@ class _VaultChatRootState extends State<VaultChatRoot>
       _storageService = await ConversationStorageService.open();
       _contactService = await ContactStorageService.open();
       await _startNostrConnectionService();
-      _startGlobalExpiryTimer();
-      await _purgeExpiredMessagesAndReload();
       await _reloadConversations();
     } catch (e) {
       _startupError = 'Eroare initializare: $e';
@@ -587,7 +603,16 @@ class _VaultChatRootState extends State<VaultChatRoot>
   }
 
   Future<void> _loadOrCreateKeys() async {
-    final savedPrivateKey = await SecureKeyStorageService.readPrivateKey();
+    // Try reading up to 3 times - on some Android 11 devices (e.g. Nokia 5.4)
+    // the first read after cold boot may fail transiently.
+    String? savedPrivateKey;
+    for (int attempt = 0; attempt < 3; attempt++) {
+      savedPrivateKey = await SecureKeyStorageService.readPrivateKey();
+      if (savedPrivateKey != null && savedPrivateKey.trim().isNotEmpty) break;
+      if (attempt < 2) {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }
+    }
 
     if (savedPrivateKey != null && savedPrivateKey.trim().isNotEmpty) {
       _keyPair = _nostr.keys.generateKeyPairFromExistingPrivateKey(
@@ -596,6 +621,9 @@ class _VaultChatRootState extends State<VaultChatRoot>
     } else {
       final newPair = _nostr.keys.generateKeyPair();
       await SecureKeyStorageService.writePrivateKey(newPair.private);
+      // Record when this identity was created so relay subscriptions can
+      // use this as 'since', preventing historical message replay.
+      await SecureKeyStorageService.writeIdentityActivatedAt(DateTime.now());
       _keyPair = newPair;
     }
   }
@@ -604,9 +632,13 @@ class _VaultChatRootState extends State<VaultChatRoot>
     final keyPair = _keyPair;
     if (keyPair == null) return;
 
+    final identityActivatedAt =
+        await SecureKeyStorageService.readIdentityActivatedAt();
+
     final service = NostrConnectionService(
       relayUrls: _relayUrls,
       keyPair: keyPair,
+      identityActivatedAt: identityActivatedAt,
     );
 
     _connectionService = service;
@@ -618,15 +650,22 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
     _incomingMessageSubscription =
         service.messageStream.listen((message) async {
-      await _purgeExpiredMessagesAndReload(forceReload: false);
+
       await _storageService?.saveMessage(message);
       if (!mounted) return;
-      await _purgeExpiredMessagesAndReload(forceReload: true);
+      await _reloadConversations();
     });
 
     _remoteCommandSubscription =
         service.commandStream.listen((command) async {
       if (!command.isDeleteConversation) return;
+
+      // Defense in depth: double-check command age here too.
+      // nostr_connection_service already filters at source, but this
+      // catches any edge cases (e.g. system clock drift between devices).
+      final commandAge = DateTime.now().difference(command.createdAt);
+      if (commandAge.inMinutes >= 2) return; // stale — ignore
+
       await _storageService?.deleteConversationCompletely(
         command.conversationId,
         deletedAt: command.createdAt,
@@ -634,14 +673,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
       await _contactService?.deleteContact(command.senderPublicKey);
       if (!mounted) return;
       await _reloadConversations();
-
-      final ageSeconds = DateTime.now()
-          .difference(command.createdAt)
-          .inSeconds;
-
-      if (ageSeconds <= 8) {
-        _showSnackBar('O conversație a fost ștearsă de la distanță.');
-      }
+      _showSnackBar('O conversație a fost ștearsă de la distanță.');
     });
 
     await service.start();
@@ -654,13 +686,14 @@ class _VaultChatRootState extends State<VaultChatRoot>
     _incomingMessageSubscription = null;
     await _remoteCommandSubscription?.cancel();
     _remoteCommandSubscription = null;
-    _globalExpiryTimer?.cancel();
-    _globalExpiryTimer = null;
     await _connectionService?.dispose();
     _connectionService = null;
 
     if (!mounted) return;
     await _startNostrConnectionService();
+    // Restart expiry timer — it was cancelled above and _startNostrConnectionService
+    // does not restart it. Without this, expired messages are never purged after
+    // identity switch or restore.
   }
 
   Future<void> _reloadConversations() async {
@@ -688,24 +721,8 @@ class _VaultChatRootState extends State<VaultChatRoot>
     });
   }
 
-  void _startGlobalExpiryTimer() {
-    _globalExpiryTimer?.cancel();
-    _globalExpiryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      unawaited(_purgeExpiredMessagesAndReload());
-    });
-  }
 
-  Future<void> _purgeExpiredMessagesAndReload({bool forceReload = false}) async {
-    final storage = _storageService;
-    if (storage == null) return;
 
-    final deleted = await storage.deleteExpiredMessages();
-    if (!mounted) return;
-
-    if (deleted > 0 || forceReload) {
-      await _reloadConversations();
-    }
-  }
 
   Future<void> _manualReconnect() async {
     try {
@@ -780,7 +797,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
       return;
     }
 
-    await prefs.setString(_lastRecipientStorageKey, normalizedRecipient);
+    await prefs.remove(_lastRecipientStorageKey);
 
     final storedContactLabel =
         await _contactService?.displayNameFor(normalizedRecipient);
@@ -801,9 +818,9 @@ class _VaultChatRootState extends State<VaultChatRoot>
         builder: (_) => ChatScreen(
           myPublicKey: keyPair.public,
           recipientPublicKey: normalizedRecipient,
+          peerLabel: contactLabel ?? normalizedRecipient.substring(0, 8),
           storageService: storage,
           connectionService: connection,
-          contactLabel: contactLabel,
           onConversationChanged: _reloadConversations,
           onConversationDeleted: (peerPublicKey) async {
             await _contactService?.deleteContact(peerPublicKey);
@@ -824,14 +841,10 @@ class _VaultChatRootState extends State<VaultChatRoot>
   }
 
   Future<void> _openLastConversationOrNewChat() async {
-    final prefs = await SharedPreferences.getInstance();
-    final lastRecipient = prefs.getString(_lastRecipientStorageKey);
-
-    if (lastRecipient != null && _isValidPublicKey(lastRecipient)) {
-      await _openChatWithRecipient(lastRecipient.trim());
-      return;
-    }
-
+    // Do not auto-recreate a previous recipient from SharedPreferences.
+    // That caused ghost conversations and pre-filled recipient state after
+    // delete/reinstall/update flows. The empty-state CTA should either open an
+    // existing visible conversation or a clean new-conversation sheet.
     if (_conversations.isNotEmpty) {
       await _openConversation(_conversations.first);
       return;
@@ -884,7 +897,8 @@ class _VaultChatRootState extends State<VaultChatRoot>
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetContext) => const _ContactEntrySheet(
+      builder: (sheetContext) => _ContactEntrySheet(
+        key: UniqueKey(),
         title: 'Conversație nouă',
         subtitle: 'Introdu ID-ul public sau linkul VaultChat al destinatarului.',
         actionLabel: 'Deschide',
@@ -959,7 +973,8 @@ class _VaultChatRootState extends State<VaultChatRoot>
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (sheetContext) => const _ContactEntrySheet(
+      builder: (sheetContext) => _ContactEntrySheet(
+        key: UniqueKey(),
         title: 'Contact nou',
         subtitle: 'Salvează un nume local pentru un ID public VaultChat.',
         actionLabel: 'Salvează',
@@ -1144,7 +1159,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
       try {
         final backupText = await _createEncryptedIdentityBackup(password);
         if (!mounted) return;
-        await Clipboard.setData(ClipboardData(text: backupText));
+        await _copySensitiveBackupToClipboard(backupText);
         if (!mounted) return;
         await _showEncryptedBackupResultDialog(backupText);
       } catch (e) {
@@ -1250,10 +1265,10 @@ class _VaultChatRootState extends State<VaultChatRoot>
                     tooltip: 'Copiaza',
                     icon: const Icon(Icons.copy_rounded),
                     onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: backupText));
+                      await _copySensitiveBackupToClipboard(backupText);
                       if (!ctx.mounted) return;
                       ScaffoldMessenger.of(ctx).showSnackBar(
-                        const SnackBar(content: Text('Backup copiat temporar in clipboard.')),
+                        const SnackBar(content: Text('Backup copiat. Se sterge din clipboard in 90 secunde.')),
                       );
                     },
                   ),
@@ -1269,7 +1284,9 @@ class _VaultChatRootState extends State<VaultChatRoot>
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Text(
-                  'Nu trimite acest backup altor persoane. Clipboard-ul va fi curatat automat dupa 90 secunde, daca textul nu a fost inlocuit de altceva.',
+                  'Nu trimite acest backup altor persoane. '
+                  'Clipboard-ul se curata automat dupa 90 secunde cat aplicatia e activa. '
+                  'Daca dezinstalezi aplicatia inainte de 90 secunde, sterge clipboard-ul manual din setarile telefonului.',
                   style: TextStyle(
                     fontSize: 12,
                     color: SecureChatColors.warning,
@@ -1287,11 +1304,11 @@ class _VaultChatRootState extends State<VaultChatRoot>
             ),
             FilledButton.icon(
               onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: backupText));
+                await _copySensitiveBackupToClipboard(backupText);
                 if (!ctx.mounted) return;
                 Navigator.of(ctx, rootNavigator: true).pop();
                 if (!mounted) return;
-                _showSnackBar('Backup criptat copiat temporar in clipboard. Salveaza-l offline.');
+                _showSnackBar('Backup criptat copiat. Se sterge din clipboard in 90 secunde.');
               },
               icon: const Icon(Icons.copy_rounded),
               label: const Text('Copiaza si inchide'),
@@ -1452,8 +1469,10 @@ class _VaultChatRootState extends State<VaultChatRoot>
         for (final item in messagesRaw) {
           if (item is Map) {
             final message = MessageModel.fromMap(item);
+            // Accept any message with valid ID and keys — don't filter by text
+            // (text could be a system message or encrypted payload) and don't
+            // filter by expiry here (restoreBackupSnapshot handles expiry policy).
             if (message.id.trim().isNotEmpty &&
-                message.text.trim().isNotEmpty &&
                 message.senderPublicKey.trim().isNotEmpty &&
                 message.recipientPublicKey.trim().isNotEmpty) {
               restoredMessages.add(message);
@@ -1501,27 +1520,33 @@ class _VaultChatRootState extends State<VaultChatRoot>
       }
 
       await SecureKeyStorageService.writePrivateKey(privateKey.trim());
+      // Record activation time so relay subscription 'since' filter
+      // prevents historical message replay after restore with same keys.
+      await SecureKeyStorageService.writeIdentityActivatedAt(DateTime.now());
 
       _keyPair = restoredPair;
 
-      if (restoredContacts.isNotEmpty) {
-        _contactService ??= await ContactStorageService.open();
-        for (final contact in restoredContacts) {
-          await _contactService?.upsertContact(
-            publicKey: contact.publicKey,
-            displayName: contact.displayName,
-          );
-        }
-      }
-
-      if (restoredMessages.isNotEmpty || restoredConversations.isNotEmpty) {
-        _storageService ??= await ConversationStorageService.open();
-        await _storageService?.restoreBackupSnapshot(
-          messages: restoredMessages,
-          conversations: restoredConversations,
-          replaceExisting: true,
+      // Always close and reopen storage services before restore to ensure
+      // we are using the current Hive AES key from Keystore, not a cached key
+      // from a previous session or after a wipe. Using ??= here would silently
+      // reuse a stale open box and cause decryption failures on next app start.
+      await _contactService?.close();
+      _contactService = await ContactStorageService.open();
+      await _contactService?.clearAll();
+      for (final contact in restoredContacts) {
+        await _contactService?.upsertContact(
+          publicKey: contact.publicKey,
+          displayName: contact.displayName,
         );
       }
+
+      await _storageService?.close();
+      _storageService = await ConversationStorageService.open();
+      await _storageService?.restoreBackupSnapshot(
+        messages: restoredMessages,
+        conversations: restoredConversations,
+        replaceExisting: true,
+      );
 
       await _restartConnectionForCurrentIdentity();
       await _reloadConversations();
@@ -1790,7 +1815,6 @@ class _VaultChatRootState extends State<VaultChatRoot>
     _statusSubscription?.cancel();
     _incomingMessageSubscription?.cancel();
     _remoteCommandSubscription?.cancel();
-    _globalExpiryTimer?.cancel();
     _clipboardClearTimer?.cancel();
     unawaited(_connectionService?.dispose());
     unawaited(_storageService?.close());

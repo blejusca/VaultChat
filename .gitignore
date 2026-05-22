@@ -1,48 +1,28 @@
-# Flutter / Dart
+# Flutter/Dart
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
-.pub-cache/
-.pub/
 build/
-*.hprof
-*.log
 
-# Android
+# Android/Gradle
 android/.gradle/
-android/captures/
-android/gradlew
-android/gradlew.bat
 android/local.properties
-android/key.properties
-*.jks
-*.keystore
-
-# iOS
-ios/.symlinks/
-ios/Flutter/Flutter.framework
-ios/Flutter/Flutter.podspec
-ios/Pods/
-ios/Runner.xcworkspace/
-*.ipa
-*.dSYM.zip
-*.dSYM
+android/app/build/
+.gradle/
 
 # IDE
 .idea/
 .vscode/
 *.iml
-*.ipr
-*.iws
 
-# macOS
+# Generated / local artifacts
+*.apk
+*.aab
+*.ap_
+*.hprof
+*.log
+
+# OS
 .DS_Store
-**/.DS_Store
-
-# Sensitive — never commit
-android/app/google-services.json
-ios/Runner/GoogleService-Info.plist
-
-# Generated
-pubspec.lock
+Thumbs.db

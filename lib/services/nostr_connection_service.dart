@@ -3,9 +3,10 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:dart_nostr/dart_nostr.dart';
-import 'package:nip04/nip04.dart';
+import 'package:nip04/nip04.dart'; // kept for backward-compat decrypt of old messages
 
 import '../models/message_model.dart';
+import 'nip44_service.dart';
 
 enum SecureChatConnectionState {
   idle,
@@ -63,11 +64,17 @@ class RemoteConversationCommand {
 }
 
 class NostrConnectionService {
+  /// [identityActivatedAt] — timestamp when the current identity was created
+  /// or last restored. Used as relay subscription 'since' to prevent historical
+  /// message replay after identity deletion and recreation with the same keys.
+  /// If null, falls back to 31 days ago (safe default for first-time setup).
   NostrConnectionService({
     required List<String> relayUrls,
     required NostrKeyPairs keyPair,
+    DateTime? identityActivatedAt,
   })  : _relayUrls = relayUrls,
-        _keyPair = keyPair;
+        _keyPair = keyPair,
+        _identityActivatedAt = identityActivatedAt;
 
   static const Duration _hardReconnectDelay = Duration(milliseconds: 650);
   static const Duration _connectTimeout = Duration(seconds: 12);
@@ -77,6 +84,7 @@ class NostrConnectionService {
 
   final List<String> _relayUrls;
   final NostrKeyPairs _keyPair;
+  final DateTime? _identityActivatedAt;
   final Nostr _nostr = Nostr.instance;
 
   final StreamController<SecureChatConnectionSnapshot> _statusController =
@@ -219,7 +227,10 @@ class NostrConnectionService {
         NostrFilter(
           kinds: [4],
           limit: 300,
-          since: DateTime.now().subtract(const Duration(days: 31)),
+          // Use identity activation time as 'since' to prevent relay from
+          // replaying historical messages after identity deletion + recreation.
+          // Falls back to 31 days if no activation time recorded (first setup).
+          since: _identityActivatedAt ?? DateTime.now().subtract(const Duration(days: 31)),
           p: [publicKey],
         ),
       ],
@@ -230,7 +241,7 @@ class NostrConnectionService {
     subResult.fold(
       (eventsStream) {
         _subscription = eventsStream.stream.listen(
-          _handleIncomingEvent,
+          (event) => unawaited(_handleIncomingEvent(event)),
           onError: (_) {
             _hasSuccessfulConnect = false;
             _emitStatus(
@@ -256,7 +267,7 @@ class NostrConnectionService {
     );
   }
 
-  void _handleIncomingEvent(NostrEvent event) {
+  Future<void> _handleIncomingEvent(NostrEvent event) async {
     final publicKey = _keyPair.public;
     final tags = event.tags ?? [];
 
@@ -278,11 +289,19 @@ class NostrConnectionService {
     _rememberIncomingEventId(eventId);
 
     try {
-      final decrypted = Nip04.decrypt(
-        encrypted,
-        _keyPair.private,
-        event.pubkey,
-      );
+      // Try NIP-44 first (new standard). Fall back to NIP-04 for older messages
+      // sent before the NIP-44 migration, ensuring no messages are lost.
+      String decrypted;
+      try {
+        decrypted = await Nip44Service.decrypt(
+          payload: encrypted,
+          recipientPrivKeyHex: _keyPair.private,
+          senderPubKeyHex: event.pubkey,
+        );
+      } catch (_) {
+        // NIP-44 failed — attempt NIP-04 (legacy)
+        decrypted = Nip04.decrypt(encrypted, _keyPair.private, event.pubkey);
+      }
 
       if (decrypted.trim().isEmpty) return;
 
@@ -300,6 +319,15 @@ class NostrConnectionService {
       }
 
       if (payload.type == _VaultPayloadType.deleteConversation) {
+        // SECURITY FIX: Ignore stale delete commands replayed from relay after
+        // restore or restart. Delete commands must be live-action only.
+        // Commands older than 2 minutes are treated as relay replay artifacts
+        // and silently discarded. Live deletes are always within seconds.
+        final commandAge = DateTime.now().difference(createdAt);
+        if (commandAge.inMinutes >= 2) {
+          return; // stale relay replay — ignore
+        }
+
         if (!_commandController.isClosed) {
           _commandController.add(
             RemoteConversationCommand(
@@ -312,14 +340,6 @@ class NostrConnectionService {
             ),
           );
         }
-        return;
-      }
-
-      final expiresAt = payload.ttlSeconds != null && payload.ttlSeconds! > 0
-          ? createdAt.add(Duration(seconds: payload.ttlSeconds!))
-          : null;
-
-      if (expiresAt != null && !DateTime.now().isBefore(expiresAt)) {
         return;
       }
 
@@ -336,7 +356,6 @@ class NostrConnectionService {
             peerPublicKey: peerPublicKey,
             createdAt: createdAt,
             isFromRelay: true,
-            expiresAt: expiresAt,
           ),
         );
       }
@@ -347,8 +366,7 @@ class NostrConnectionService {
 
   Future<SentDirectMessageResult> publishDirectMessage({
     required String recipientPublicKey,
-    required String plainText,
-    int? ttlSeconds,
+    required String plainText
   }) async {
     if (_disposed) {
       throw StateError('NostrConnectionService este inchis.');
@@ -359,16 +377,12 @@ class NostrConnectionService {
     try {
       return await _publishOnce(
         recipientPublicKey: recipientPublicKey,
-        plainText: plainText,
-        ttlSeconds: ttlSeconds,
-      );
+        plainText: plainText,      );
     } catch (_) {
       await reconnect(reason: 'Publish retry', force: true);
       return _publishOnce(
         recipientPublicKey: recipientPublicKey,
-        plainText: plainText,
-        ttlSeconds: ttlSeconds,
-      );
+        plainText: plainText,      );
     }
   }
 
@@ -411,10 +425,10 @@ class NostrConnectionService {
     required String payload,
     required String fallbackSeed,
   }) async {
-    final encrypted = Nip04.encrypt(
-      payload,
-      _keyPair.private,
-      recipientPublicKey,
+    final encrypted = await Nip44Service.encrypt(
+      plaintext: payload,
+      senderPrivKeyHex: _keyPair.private,
+      recipientPubKeyHex: recipientPublicKey,
     );
 
     final event = NostrEvent.fromPartialData(
@@ -459,14 +473,13 @@ class NostrConnectionService {
 
   Future<SentDirectMessageResult> _publishOnce({
     required String recipientPublicKey,
-    required String plainText,
-    int? ttlSeconds,
+    required String plainText
   }) async {
-    final payload = _encodeTextPayload(plainText, ttlSeconds: ttlSeconds);
-    final encrypted = Nip04.encrypt(
-      payload,
-      _keyPair.private,
-      recipientPublicKey,
+    final payload = _encodeTextPayload(plainText);
+    final encrypted = await Nip44Service.encrypt(
+      plaintext: payload,
+      senderPrivKeyHex: _keyPair.private,
+      recipientPubKeyHex: recipientPublicKey,
     );
 
     final event = NostrEvent.fromPartialData(
@@ -567,13 +580,12 @@ class NostrConnectionService {
   }
 
 
-  String _encodeTextPayload(String text, {int? ttlSeconds}) {
+  String _encodeTextPayload(String text) {
     return jsonEncode(<String, dynamic>{
       'v': 1,
       'type': 'text',
       'text': text,
       'createdAtMillis': DateTime.now().millisecondsSinceEpoch,
-      if (ttlSeconds != null && ttlSeconds > 0) 'ttlSeconds': ttlSeconds,
     });
   }
 
@@ -600,9 +612,7 @@ class NostrConnectionService {
 
     if (type == 'text') {
       final text = (decoded['text'] ?? '').toString();
-      final ttlRaw = decoded['ttlSeconds'];
-      final ttlSeconds = ttlRaw is int ? ttlRaw : int.tryParse('$ttlRaw');
-      return _VaultPayload.text(text, ttlSeconds: ttlSeconds);
+      return _VaultPayload.text(text);
     }
 
     return const _VaultPayload.invalid();
@@ -709,19 +719,16 @@ enum _VaultPayloadType { text, deleteConversation, invalid }
 class _VaultPayload {
   final _VaultPayloadType type;
   final String text;
-  final int? ttlSeconds;
 
   const _VaultPayload._({
     required this.type,
     this.text = '',
-    this.ttlSeconds,
   });
 
-  const _VaultPayload.text(String text, {int? ttlSeconds})
+  const _VaultPayload.text(String text)
       : this._(
           type: _VaultPayloadType.text,
           text: text,
-          ttlSeconds: ttlSeconds,
         );
 
   const _VaultPayload.deleteConversation()

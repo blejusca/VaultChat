@@ -41,7 +41,9 @@ class ConversationModel {
       updatedAt: DateTime.fromMillisecondsSinceEpoch(
         updatedAtMillis is int
             ? updatedAtMillis
-            : int.tryParse('$updatedAtMillis') ?? 0,
+            : updatedAtMillis is double
+                ? updatedAtMillis.toInt()
+                : int.tryParse('$updatedAtMillis') ?? 0,
       ),
       unreadCount: map['unreadCount'] is int
           ? map['unreadCount'] as int
