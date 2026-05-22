@@ -230,6 +230,19 @@ class ConversationStorageService {
     }
     if (!shouldAcceptMessage(cleanMessage)) return;
 
+    // DEFENSIVE FIX: prevent relay replay from overwriting a locally sent
+    // message (isMine:true) with a replayed incoming version (isMine:false).
+    // This happens when the relay re-delivers an event the user sent, and the
+    // incoming relay copy arrives with isMine:false after app restart but
+    // before _seenIncomingEventIds is repopulated. Without this guard, the
+    // locally sent message would be silently overwritten, making it appear
+    // to disappear from the conversation after the next reload.
+    final existingRaw = _messagesBox.get(cleanMessage.id);
+    if (existingRaw is Map) {
+      final existing = MessageModel.fromMap(existingRaw);
+      if (existing.isMine && !cleanMessage.isMine) return;
+    }
+
     await _messagesBox.put(cleanMessage.id, cleanMessage.toMap());
     await upsertConversationFromMessage(cleanMessage);
   }
