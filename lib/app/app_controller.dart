@@ -14,7 +14,7 @@ import '../services/identity_backup_service.dart';
 import '../services/nostr_connection_service.dart';
 import '../services/secure_key_storage_service.dart';
 
-/// Starea imutabilă expusă de [AppController] către UI.
+/// Immutable state exposed by [AppController] to the UI.
 class AppState {
   final bool isLoading;
   final String? startupError;
@@ -63,9 +63,9 @@ class AppState {
       );
 }
 
-/// ViewModel care gestionează toată logica de business a aplicației.
-/// Widget-ul [VaultChatRoot] ascultă [stateStream] și se reconstruiește
-/// doar când starea se schimbă — fără setState() în logica de business.
+/// ViewModel that manages all app business logic.
+/// The [VaultChatRoot] widget listens to [stateStream] and rebuilds
+/// only when state changes; no setState() in business logic.
 class AppController {
   AppController._();
 
@@ -95,7 +95,7 @@ class AppController {
     if (!_stateController.isClosed) _stateController.add(next);
   }
 
-  // ── Dependențe interne ──────────────────────────────────────────────────────
+  // ── Internal dependencies ──────────────────────────────────────────────────────
   final _nostr = Nostr.instance;
   NostrKeyPairs? _keyPair;
   ConversationStorageService? _storageService;
@@ -223,7 +223,7 @@ class AppController {
     await _startNostrService();
   }
 
-  // ── Acțiuni publice ─────────────────────────────────────────────────────────
+  // ── Public actions ─────────────────────────────────────────────────────────
 
   Future<void> manualReconnect() async {
     await _connectionService?.reconnect(reason: 'Manual', force: true);
@@ -272,7 +272,7 @@ class AppController {
     await _reloadConversations();
   }
 
-  // ── Conversații ─────────────────────────────────────────────────────────────
+  // ── Conversations ─────────────────────────────────────────────────────────────
 
   Future<void> deleteConversation(String conversationId) async {
     await _storageService?.deleteConversationCompletely(conversationId);
@@ -349,7 +349,7 @@ class AppController {
 
   // ── Auto-lock ───────────────────────────────────────────────────────────────
 
-  /// Returnează true dacă aplicația trebuie blocată (background prea lung).
+  /// Returns true if the app must be locked (background too long).
   bool shouldLock(DateTime? backgroundedAt) {
     if (backgroundedAt == null) return false;
     return DateTime.now().difference(backgroundedAt) >= _autoLockAfter;

@@ -350,7 +350,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
     final keyPair = _keyPair;
 
     if (storage == null || connection == null || keyPair == null) {
-      _showSnackBar('Aplicatia nu este initializata complet.', isError: true);
+      _showSnackBar('The app is not fully initialized.', isError: true);
       return;
     }
 
@@ -475,7 +475,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
       builder: (sheetContext) => const ContactEntrySheet(
         title: 'New conversation',
         subtitle: 'Enter the recipient public ID or VaultChat link.',
-        actionLabel: 'Deschide',
+        actionLabel: 'Open',
         requireName: false,
       ),
     );
@@ -1278,7 +1278,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Cheie publica ──
+            // ── Public key ──
             const Text(
               'ID-ul tau public (shareaza-l cu ceilalti):',
               style: TextStyle(fontSize: 12, color: SecureChatColors.mutedText),

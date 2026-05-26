@@ -4,6 +4,23 @@ import 'secure_hive_service.dart';
 
 import '../models/conversation_model.dart';
 import '../models/message_model.dart';
+import 'file_transfer_service.dart';
+
+/// Returns a human-readable inbox preview for [text].
+/// If the text is a vault attachment JSON payload, it returns
+/// an emoji label based on the attachment type instead of raw JSON.
+String _previewText(String text) {
+  final meta = AttachmentMeta.tryFromMessageText(text);
+  if (meta == null) return text;
+  switch (meta.type) {
+    case AttachmentType.image:
+      return '📎 Image';
+    case AttachmentType.pdf:
+      return '📎 PDF';
+    case AttachmentType.unknown:
+      return '📎 File';
+  }
+}
 
 class ConversationStorageService {
   ConversationStorageService._({
@@ -190,9 +207,9 @@ class ConversationStorageService {
     final conversationId = _canonicalConversationId(cleanMyKey, cleanPeerKey);
     if (conversationId.isEmpty) return;
 
-    // Conversatia a fost recreata explicit de utilizator.
-    // Eliminam tombstone-ul pentru a preveni ghost-thread state
-    // si pentru a permite reconstruirea curata a conversatiei noi.
+    // The conversation was explicitly recreated by the user.
+    // Remove the tombstone to prevent ghost-thread state
+    // and allow clean reconstruction of the new conversation.
     await _deletedConversationsBox.delete(conversationId);
 
     final existingRaw = _conversationsBox.get(conversationId);
@@ -216,7 +233,7 @@ class ConversationStorageService {
       unreadCount: existing?.unreadCount ?? 0,
     );
 
-    // O singura intrare canonica per pereche de chei. Orice cheie veche/non-canonica
+    // A single canonical entry per key pair. Any old/non-canonical key
     // este eliminata in sanitizeStorage().
     await _conversationsBox.put(conversationId, conversation.toMap());
   }
@@ -386,7 +403,7 @@ class ConversationStorageService {
           : message.recipientPublicKey,
       peerPublicKey: message.peerPublicKey,
       peerLabel: peerLabel,
-      lastMessageText: message.text,
+      lastMessageText: _previewText(message.text),
       updatedAt: message.createdAt,
       unreadCount: existing?.unreadCount ?? 0,
     );
@@ -417,11 +434,11 @@ class ConversationStorageService {
     return _deduplicateAndSort(messages);
   }
 
-  /// Paginare: uploading [pageSize] mesaje înainte de [before] (exclusiv).
-  /// Returnează mesajele în ordine cronologică (cele mai vechi primele).
-  /// Prima pagină: apelează cu [before] = null.
+  /// Pagination: load [pageSize] messages before [before] (exclusive).
+  /// Returns messages in chronological order (oldest first).
+  /// First page: call with [before] = null.
   ///
-  /// Exemplu de utilizare în ChatScreen:
+  /// Usage example in ChatScreen:
   ///   final page = await storageService.loadConversationPage(
   ///     conversationId, pageSize: 50, before: oldestLoadedMessage?.createdAt);
   Future<List<MessageModel>> loadConversationPage(
@@ -527,7 +544,7 @@ class ConversationStorageService {
             : message.recipientPublicKey,
         peerPublicKey: message.peerPublicKey,
         peerLabel: peerLabel,
-        lastMessageText: message.text,
+        lastMessageText: _previewText(message.text),
         updatedAt: message.createdAt,
         unreadCount: existing?.unreadCount ?? 0,
       );
@@ -837,7 +854,7 @@ class ConversationStorageService {
                   : (firstMsg.peerPublicKey.trim().length >= 8
                       ? firstMsg.peerPublicKey.trim().substring(0, 8)
                       : unknownContactLabel),
-              lastMessageText: firstMsg.text,
+              lastMessageText: _previewText(firstMsg.text),
               updatedAt: firstMsg.createdAt,
               unreadCount: 0,
             );

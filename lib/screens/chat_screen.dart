@@ -10,7 +10,7 @@ import '../widgets/message_bubble.dart';
 import 'chat_controller.dart';
 
 /// Ecranul de chat — exclusiv UI.
-/// Toată logica (send, upload, paginare, subscripții) este în [ChatController].
+/// All logic (send, upload, pagination, subscriptions) is in [ChatController].
 class ChatScreen extends StatefulWidget {
   final String recipientPublicKey;
   final String myPublicKey;
@@ -63,7 +63,7 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _state = _ctrl.state;
 
-    // Scroll listener pentru paginare la scroll în sus
+    // Scroll listener for pagination when scrolling up
     _scrollCtrl.addListener(_onScroll);
   }
 
@@ -87,7 +87,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _onScroll() async {
     if (_isLoadingMore) return;
     if (!_scrollCtrl.hasClients) return;
-    if (_scrollCtrl.position.pixels > 80) return; // nu la vârf
+    if (_scrollCtrl.position.pixels > 80) return; // not at the top
     if (!_ctrl.hasMoreMessages) return;
 
     _isLoadingMore = true;
@@ -95,7 +95,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final oldMax = _scrollCtrl.position.maxScrollExtent;
     final loaded = await _ctrl.loadMoreMessages();
     if (loaded && mounted) {
-      // Menține poziția de scroll după inserarea mesajelor vechi în sus
+      // Keep scroll position after inserting older messages above
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!_scrollCtrl.hasClients) return;
         final newMax = _scrollCtrl.position.maxScrollExtent;

@@ -215,8 +215,8 @@ class _AttachmentBubbleState extends State<_AttachmentBubble> {
   @override
   void initState() {
     super.initState();
-    // Nu descărcăm automat imaginile mari. Pe telefoane mai slabe asta poate
-    // bloca UI-ul și poate declanșa ANR. Imaginile mici se pot previzualiza automat.
+    // Do not auto-download large images. On weaker phones this can
+    // block the UI and trigger ANR. Small images may be previewed automatically.
     if (_meta.type == AttachmentType.image && _meta.fileSize <= 350 * 1024) {
       _download();
     }
@@ -503,7 +503,7 @@ class _PdfCard extends StatelessWidget {
                 onPressed: onOpen,
                 icon: Icon(error != null ? Icons.refresh_rounded : Icons.open_in_new_rounded,
                     color: SecureChatColors.turquoise, size: 22),
-                tooltip: error != null ? 'Retry' : 'Deschide PDF',
+                tooltip: error != null ? 'Retry' : 'Open PDF',
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints()),
       ]),

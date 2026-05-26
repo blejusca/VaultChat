@@ -18,10 +18,10 @@ class TransferStatusBanner extends StatelessWidget {
     final t = text.toLowerCase();
     if (t.contains('preparing') || t.contains('pregateste')) return 0.10;
     if (t.contains('encrypting') || t.contains('cripteaza')) return 0.30;
-    if (t.contains('uploading') || t.contains('incarca')) return 0.60;
+    if (t.contains('uploading') || t.contains('upload')) return 0.60;
     if (t.contains('verifying') || t.contains('verifica')) return 0.85;
     if (t.contains('finalizing') || t.contains('finalizeaza')) return 0.95;
-    if (t.contains('trimis') || t.contains('success')) return 1.0;
+    if (t.contains('sent') || t.contains('success')) return 1.0;
     return 0.50;
   }
 

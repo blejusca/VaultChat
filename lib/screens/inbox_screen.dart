@@ -746,7 +746,9 @@ class _ConversationTile extends StatelessWidget {
         ),
       ),
     );
-  }static String _formatTime(DateTime time) {
+  }
+
+  static String _formatTime(DateTime time) {
     final now = DateTime.now();
     final sameDay = now.year == time.year &&
         now.month == time.month &&

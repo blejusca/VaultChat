@@ -423,7 +423,7 @@ class _PinGateState extends State<PinGate> {
         ? 'VaultChat'
         : _isConfirmingNewPin
             ? 'Confirm your PIN'
-            : 'Creaza PIN';
+            : 'Create PIN';
 
     final subtitle = _hasPin
         ? 'Enter your PIN to access the app.'
@@ -431,7 +431,7 @@ class _PinGateState extends State<PinGate> {
             ? 'Enter your PIN again to confirm.'
             : _wasWiped
                 ? 'Local data was deleted. Create a new PIN, then restore the private key if you have a backup.'
-                : 'Alege un PIN de 6 cifre pentru protectia locala.';
+                : 'Choose a 6-digit PIN for local protection.';
 
     final attemptsLeft = PinLockService.maxAttempts - _failedAttempts;
 

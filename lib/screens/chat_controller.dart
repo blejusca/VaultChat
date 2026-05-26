@@ -11,7 +11,7 @@ import '../services/conversation_storage_service.dart';
 import '../services/file_transfer_service.dart';
 import '../services/nostr_connection_service.dart';
 
-/// Starea imutabilă a ecranului de chat.
+/// Immutable chat screen state.
 class ChatState {
   final List<MessageModel> messages;
   final bool isSending;
@@ -67,9 +67,9 @@ class ChatState {
       );
 }
 
-/// ViewModel pentru [ChatScreen].
-/// Separă complet logica de business (send, upload, paginare, subscripții)
-/// de widget-ul Flutter care se ocupă exclusiv de rendering.
+/// ViewModel for [ChatScreen].
+/// Fully separates business logic (send, upload, pagination, subscriptions)
+/// from the Flutter widget responsible only for rendering.
 class ChatController {
   ChatController({
     required this.recipientPublicKey,
@@ -91,7 +91,7 @@ class ChatController {
   final Future<void> Function() onConversationChanged;
   final Future<void> Function(String peerPublicKey)? onConversationDeleted;
 
-  // ── Paginare ──────────────────────────────────────────────────────────────
+  // ── Pagination ──────────────────────────────────────────────────────────────
   static const int _pageSize = 50;
   bool _hasMoreMessages = true;
   DateTime? _oldestLoaded;
@@ -141,7 +141,7 @@ class ChatController {
     loadInitialMessages();
   }
 
-  // ── Paginare reală ────────────────────────────────────────────────────────
+  // ── Real pagination ────────────────────────────────────────────────────────
 
   Future<void> loadInitialMessages() async {
     final page = await storageService.loadConversationPage(
@@ -157,7 +157,7 @@ class ChatController {
     _emit(_state.copyWith(messages: page));
   }
 
-  /// Apelat la scroll în sus — returnează true dacă au fost încărcate mesaje.
+  /// Called when scrolling up; returns true if messages were loaded.
   Future<bool> loadMoreMessages() async {
     if (!_hasMoreMessages) return false;
     final page = await storageService.loadConversationPage(
@@ -177,7 +177,7 @@ class ChatController {
 
   bool get hasMoreMessages => _hasMoreMessages;
 
-  // ── Trimitere text ────────────────────────────────────────────────────────
+  // ── Text sending ────────────────────────────────────────────────────────
 
   Future<void> sendMessage(String text) async {
     final trimmed = text.trim();
@@ -214,7 +214,7 @@ class ChatController {
     }
   }
 
-  // ── Upload fișier criptat ─────────────────────────────────────────────────
+  // ── Encrypted file upload ─────────────────────────────────────────────────
 
   Future<void> encryptAndSendBytes({
     required Uint8List bytes,
@@ -352,7 +352,7 @@ class ChatController {
     final t = text.toLowerCase();
     if (t.contains('preparing') || t.contains('pregateste')) return 0.10;
     if (t.contains('encrypting') || t.contains('cripteaza')) return 0.30;
-    if (t.contains('uploading') || t.contains('incarca')) return 0.60;
+    if (t.contains('uploading') || t.contains('upload')) return 0.60;
     if (t.contains('verifying') || t.contains('verifica')) return 0.85;
     if (t.contains('finalizing') || t.contains('finalizeaza')) return 0.95;
     return 0.50;

@@ -84,7 +84,7 @@ class Nip44Service {
   }) {
     final nonce = _hexToBytes(nonceHex);
     if (nonce.length != _nonceLen) {
-      throw ArgumentError('NIP-44: nonce invalid pentru test');
+      throw ArgumentError('NIP-44: invalid test nonce');
     }
     final conversationKey = _conversationKey(senderPrivKeyHex, recipientPubKeyHex);
     return _encryptWithConversationKey(
@@ -220,7 +220,7 @@ class Nip44Service {
     }
 
     final x = sharedPoint.x?.toBigInteger();
-    if (x == null) throw ArgumentError('NIP-44: ECDH fara coordonata X');
+    if (x == null) throw ArgumentError('NIP-44: ECDH missing X coordinate');
     return _bigIntToBytes(x, 32);
   }
 

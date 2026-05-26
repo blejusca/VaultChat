@@ -26,8 +26,8 @@ class RestoredIdentityBackup {
   });
 }
 
-/// Toate operațiunile criptografice legate de backup/restore identitate VaultChat.
-/// Separat complet de UI — testabil fără Flutter.
+/// All cryptographic operations related to VaultChat identity backup/restore.
+/// Fully separated from UI; testable without Flutter.
 class IdentityBackupService {
   IdentityBackupService._();
 
@@ -57,7 +57,7 @@ class IdentityBackupService {
   static String normalizeRestorePayload(String raw) {
     final trimmed = raw.trim();
     if (trimmed.startsWith(backupPrefix)) return trimmed;
-    // Suport paste cu whitespace sau newline accidental
+    // Supports paste with accidental whitespace or newlines
     final cleaned = trimmed.replaceAll(RegExp(r'\s+'), '');
     if (cleaned.startsWith(backupPrefix)) return cleaned;
     return trimmed;
@@ -122,7 +122,7 @@ class IdentityBackupService {
   ) async {
     final normalized = normalizeRestorePayload(backupText);
 
-    // Caz simplu: cheie privată hex brută (fără backup wrapper)
+    // Simple case: raw private key hex (without backup wrapper)
     if (isValidKey(normalized)) {
       final nostr = Nostr.instance;
       final pair = nostr.keys.generateKeyPairFromExistingPrivateKey(normalized.trim());

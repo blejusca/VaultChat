@@ -78,7 +78,7 @@ class NostrConnectionService {
 
   static const Duration _hardReconnectDelay = Duration(milliseconds: 650);
   static const Duration _connectTimeout = Duration(seconds: 12);
-  static const Duration _publishTimeout = Duration(seconds: 30); // mărit pentru fișiere inline mari
+  static const Duration _publishTimeout = Duration(seconds: 30); // increased for large inline files
   static const Duration _softRefreshInterval = Duration(minutes: 2);
   static const int _maxSeenIncomingEventIds = 1000;
 
@@ -366,7 +366,7 @@ class NostrConnectionService {
         );
       }
     } catch (_) {
-      // Evenimentele care nu pot fi decriptate pentru cheia curenta se ignora.
+      // Events that cannot be decrypted for the current key are ignored.
     }
   }
 
@@ -605,14 +605,14 @@ class NostrConnectionService {
     final raw = decrypted.trim();
     if (raw.isEmpty) return const _VaultPayload.invalid();
 
-    // Attachment trimis direct ca rawPayload — detectăm fără wrapper
+    // Attachment sent directly as rawPayload; detect without wrapper
     if (raw.startsWith('{') && raw.contains('"vault_attachment"')) {
       return _VaultPayload.text(raw);
     }
 
     final decoded = _decodeProtocolJson(raw);
     if (decoded == null) {
-      // Backward compatibility: mesajele vechi, trimise inainte de protocolul
+      // Backward compatibility: old messages sent before the protocol
       // JSON v1, raman afisabile ca text normal. In schimb, payload-urile care
       // arata ca JSON/protocol corupt NU se afiseaza brut in UI.
       if (_looksLikeProtocolPayload(raw)) {
@@ -644,7 +644,7 @@ class NostrConnectionService {
       decoded = null;
     }
 
-    // Unele payload-uri pot ajunge ca string JSON dublu-encodat, de forma:
+    // Some payloads may arrive as double-encoded JSON strings, in the form:
     // "{\"v\":1,\"type\":...}". Le decodam inca o data.
     if (decoded is String) {
       final inner = decoded.trim();
@@ -656,7 +656,7 @@ class NostrConnectionService {
       }
     }
 
-    // Fallback defensiv pentru payload-uri cu ghilimele escapate, dar fara
+    // Defensive fallback for payloads with escaped quotes, but without
     // ghilimele exterioare valide.
     if (decoded == null && raw.contains(r'"')) {
       final unescaped = raw.replaceAll(r'"', '"').trim();

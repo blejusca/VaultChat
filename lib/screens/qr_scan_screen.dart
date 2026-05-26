@@ -59,9 +59,9 @@ class _QrScanScreenState extends State<QrScanScreen> {
       _isReturning = true;
     });
 
-    // Oprim camera înainte de a părăsi ecranul. Pe Samsung/Nokia,
-    // pop-ul imediat al ecranului cu preview camera poate lăsa aplicația
-    // într-un ecran negru.
+    // Stop the camera before leaving the screen. On Samsung/Nokia,
+    // immediately popping the camera preview screen can leave the app
+    // on a black screen.
     await _stopCameraSafely();
     await Future<void>.delayed(const Duration(milliseconds: 350));
 

@@ -12,7 +12,7 @@ class MessageModel {
   final String peerPublicKey;
   final DateTime createdAt;
   final bool isFromRelay;
-  final DateTime? expiresAt; // NOU — null = niciodată
+  final DateTime? expiresAt; // NEW — null = never
 
   const MessageModel({
     required this.id,
@@ -33,11 +33,11 @@ class MessageModel {
     return DateTime.now().isAfter(expiresAt!);
   }
 
-  /// Returnează metadata dacă mesajul conține un fișier criptat.
+  /// Returns metadata if the message contains an encrypted file.
   AttachmentMeta? get attachment =>
       AttachmentMeta.tryFromMessageText(text);
 
-  /// True dacă mesajul este un fișier/foto atașat.
+  /// True if the message is an attached file/photo.
   bool get hasAttachment => attachment != null;
 
   Map<String, dynamic> toMap() {

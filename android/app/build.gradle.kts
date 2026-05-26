@@ -8,8 +8,8 @@ plugins {
 
 // ── Keystore configuration ────────────────────────────────────────────────────
 // key.properties este exclus din git (vezi .gitignore).
-// Pentru build release local: completează key.properties cu valorile reale.
-// Pentru CI/CD: setează variabilele de mediu și decomentează blocul de mai jos.
+// For local release builds: fill key.properties with the real values.
+// For CI/CD: set environment variables and uncomment the block below.
 //
 // val storePasswordEnv = System.getenv("VAULTCHAT_STORE_PASSWORD") ?: ""
 // val keyPasswordEnv   = System.getenv("VAULTCHAT_KEY_PASSWORD") ?: ""
@@ -20,7 +20,7 @@ if (keyPropertiesFile.exists()) {
     keyPropertiesFile.inputStream().use { keyProperties.load(it) }
 }
 
-// Citim valorile cu fallback la string gol — buildurile debug nu necesită keystore.
+// Read values with an empty-string fallback. Debug builds do not require a keystore.
 val releaseKeyAlias    : String = keyProperties.getProperty("keyAlias",    "")
 val releaseKeyPassword : String = keyProperties.getProperty("keyPassword", "")
 val releaseStoreFile   : String = keyProperties.getProperty("storeFile",   "")
@@ -52,8 +52,8 @@ android {
         versionName = flutter.versionName
     }
 
-    // Signing config pentru release — configurat doar dacă keystoreul există.
-    // Build debug funcționează întotdeauna, indiferent de key.properties.
+    // Release signing config. Created only when the keystore exists.
+    // Debug builds always work, regardless of key.properties.
     if (hasReleaseKeystore) {
         signingConfigs {
             create("release") {

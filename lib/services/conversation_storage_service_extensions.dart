@@ -244,7 +244,7 @@ extension ConversationStorageServiceOperations on ConversationStorageService {
               peerLabel: firstMsg.senderLabel.trim().isNotEmpty
                   ? firstMsg.senderLabel
                   : ConversationStorageService.unknownContactLabel,
-              lastMessageText: firstMsg.text,
+              lastMessageText: _previewText(firstMsg.text),
               updatedAt: firstMsg.createdAt,
               unreadCount: 0,
             );

@@ -16,8 +16,8 @@ import '../theme/secure_chat_theme.dart';
 import '../widgets/contact_entry_sheet.dart';
 import 'app_controller.dart';
 
-/// Root widget al aplicației — exclusiv UI.
-/// Toată logica de business este delegată către [AppController].
+/// Root widget of the app; UI only.
+/// All business logic is delegated to [AppController].
 class VaultChatRoot extends StatefulWidget {
   const VaultChatRoot({super.key});
 
@@ -157,7 +157,7 @@ class _VaultChatRootState extends State<VaultChatRoot>
       builder: (_) => const ContactEntrySheet(
         title: 'New conversation',
         subtitle: 'Enter the recipient public ID or VaultChat link.',
-        actionLabel: 'Deschide',
+        actionLabel: 'Open',
         requireName: false,
       ),
     );
@@ -334,9 +334,9 @@ class _VaultChatRootState extends State<VaultChatRoot>
 
     if (!mounted || rawValue == null || rawValue.trim().isEmpty) return;
 
-    // Lăsăm ruta camerei să se închidă complet înainte de a deschide
-    // dialogul de nume. Fără acest mic delay, pe unele telefoane apare
-    // assertion Flutter `_dependents.isEmpty` după scanare.
+    // Let the camera route close completely before opening
+    // the name dialog. Without this small delay, some phones can trigger
+    // the Flutter `_dependents.isEmpty` assertion after scanning.
     await Future<void>.delayed(const Duration(milliseconds: 260));
     if (!mounted) return;
 
@@ -444,8 +444,8 @@ class _VaultChatRootState extends State<VaultChatRoot>
           );
         },
       );
-      // Lăsăm dialogul și focus tree-ul să se demonteze complet înainte
-      // de dispose/navigare. Evită crash-ul `_dependents.isEmpty` pe Android.
+      // Let the dialog and focus tree fully unmount before
+      // dispose/navigation. Prevents `_dependents.isEmpty` crashes on Android.
       await Future<void>.delayed(const Duration(milliseconds: 220));
       return result;
     } finally {
@@ -486,8 +486,8 @@ class _VaultChatRootState extends State<VaultChatRoot>
     );
 
     if (openChatAfterSave) {
-      // Deschiderea automată se păstrează doar pentru fluxurile manuale unde
-      // ruta camerei nu este implicată. Pentru QR scan rămânem în Inbox.
+      // Automatic opening is kept only for manual flows where
+      // the camera route is not involved. For QR scan, remain in Inbox.
       await Future<void>.delayed(const Duration(milliseconds: 420));
       if (!mounted) return;
       await _openChatWith(publicKey);

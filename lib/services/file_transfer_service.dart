@@ -106,30 +106,30 @@ class UploadResult {
 class FileTransferService {
   FileTransferService._();
 
-  static const int maxFileSizeBytes = 25 * 1024 * 1024; // limita tehnica de siguranta: fisiere <= 25 MB
+  static const int maxFileSizeBytes = 25 * 1024 * 1024; // technical safety limit: files <= 25 MB
   static const Duration _uploadTimeout = Duration(seconds: 45);
   static const Duration _requestSendTimeout = Duration(seconds: 45);
   static const Duration _requestReadTimeout = Duration(seconds: 45);
 
-  // Fallback inline: doar pentru fisiere foarte mici. Nu este solutia finala,
+  // Inline fallback: only for very small files. This is not the final solution,
   // dar evita blocarea totala daca toate serviciile publice de upload refuza.
-  static const int _maxInlineEncryptedBytes = 4 * 1024; // doar fallback de diagnostic; NU trimitem fisiere prin Nostr
+  static const int _maxInlineEncryptedBytes = 4 * 1024; // diagnostic fallback only; DO NOT send files through Nostr
 
   // ── AVERTISMENT DE SECURITATE ─────────────────────────────────────────────
-  // Serverele de mai jos sunt servicii TERȚE PUBLICE necontrolate.
-  // Conținutul fișierelor este criptat AES-GCM-256 înainte de upload, deci
+  // The services below are uncontrolled PUBLIC THIRD-PARTY services.
+  // File contents are encrypted with AES-GCM-256 before upload, so
   // operatorii NU pot citi datele. Cu toate acestea:
-  //   - Metadatele (dimensiune, timing, frecvență) sunt vizibile.
-  //   - Disponibilitatea nu este garantată (servicii gratuite cu TTL variabil).
-  //   - RECOMANDAT pentru producție: înlocuiți cu infrastructură proprie
-  //     (MinIO, AWS S3 privat, sau Nostr Blossom BUD-06).
+  //   - Metadata (size, timing, frequency) remains visible.
+  //   - Availability is not guaranteed (free services with variable TTL).
+  //   - RECOMMENDED for production: replace with your own infrastructure
+  //     (MinIO, private AWS S3, or Nostr Blossom BUD-06).
   // ─────────────────────────────────────────────────────────────────────────
-  // Servere externe pentru stocarea fișierului criptat.
-  // Ordinea evită Litterbox/Catbox ca primă opțiune, deoarece pe unele telefoane
-  // Android request-ul multipart către ele poate rămâne suspendat mult timp.
+  // External servers for storing the encrypted file.
+  // This order avoids Litterbox/Catbox as the first option because on some phones
+  // the Android multipart request to them can remain pending for a long time.
   static const List<_UploadServer> _servers = [
-    // tmpfiles.org a dat 404 la download in teste; îl păstrăm implementat,
-    // dar nu îl folosim implicit pentru atașamente criptate.
+    // tmpfiles.org returned 404 on download during tests; keep it implemented,
+    // but do not use it by default for encrypted attachments.
     _UploadServer.pomf,
     _UploadServer.catbox,
     _UploadServer.litterbox,
@@ -149,8 +149,8 @@ class FileTransferService {
     final key = _secureRandom(32);
     final iv = _secureRandom(12);
 
-    // AES-GCM stabilizat: folosim pachetul cryptography pentru fișiere.
-    // PointyCastle rămâne mai jos doar pentru compatibilitate cu mesaje vechi.
+    // Stabilized AES-GCM: use the cryptography package for files.
+    // PointyCastle remains below only for legacy message compatibility.
     final encrypted = await _encryptAesGcmStable(
       plaintext: fileBytes,
       key: key,
@@ -159,7 +159,7 @@ class FileTransferService {
 
     onProgress?.call('Encrypting file...');
 
-    // Blob v2: ciphertext + tag. Tag-ul este inclus în fișierul uploadat.
+    // Blob v2: ciphertext + tag. The tag is included in the uploaded file.
     final uploadBlob = Uint8List(encrypted.ciphertext.length + encrypted.tag.length)
       ..setAll(0, encrypted.ciphertext)
       ..setAll(encrypted.ciphertext.length, encrypted.tag);
@@ -168,8 +168,8 @@ class FileTransferService {
     String? uploadedUrl;
     final List<String> errors = [];
 
-    // Regula fixa: NU trimitem continutul fisierului prin Nostr.
-    // Nostr primeste doar metadata mica + URL. Continutul criptat merge pe storage extern.
+    // Fixed rule: DO NOT send file contents through Nostr.
+    // Nostr receives only small metadata + URL. Encrypted content goes to external storage.
     for (final server in _servers) {
       try {
         onProgress?.call('Uploading file...');
@@ -182,9 +182,9 @@ class FileTransferService {
           'Timeout upload ${server.name}',
         );
 
-        // Stabilizare critică: nu trimitem URL-ul mai departe până nu verifyingm
-        // că serverul returnează EXACT același blob criptat. Asta previne
-        // InvalidCipherTextException și HTTP 404 la destinatar.
+        // Critical stabilization: do not send the URL further until we verify
+        // that the server returns the EXACT same encrypted blob. This prevents
+        // InvalidCipherTextException and HTTP 404 on the recipient side.
         onProgress?.call('Verifying secure transfer...');
         final downloaded = await _downloadWithRedirect(candidateUrl);
         if (!_bytesEqual(downloaded, uploadBlob)) {
@@ -205,7 +205,7 @@ class FileTransferService {
 
     uploadedUrl ??= _buildInlineUrlIfSmall(uploadBlob, errors);
 
-    // enc_tag este acum redundant (inclus în blob) dar îl păstrăm pentru compatibilitate.
+    // enc_tag is now redundant (included in the blob), but kept for compatibility.
     return UploadResult(
       remoteUrl: uploadedUrl,
       encKeyHex: _toHex(key),
@@ -240,7 +240,7 @@ class FileTransferService {
       }
     }
 
-    // Blob v2: tag-ul este inclus în ultimii 16 bytes ai fișierului.
+    // Blob v2: the tag is included in the last 16 bytes of the file.
     if (encryptedBytes.length < 17) {
       throw Exception('Downloaded blob too small: ${encryptedBytes.length} bytes');
     }
@@ -257,8 +257,8 @@ class FileTransferService {
         tag: tagFromBlob,
       );
     } catch (_) {
-      // Compatibilitate defensivă cu mesaje generate de versiuni intermediare:
-      // dacă tag-ul inclus în blob nu merge, încercăm tag-ul din metadata.
+      // Defensive compatibility with messages generated by intermediate versions:
+      // if the tag included in the blob fails, try the tag from metadata.
       if (encTagHex.trim().isNotEmpty) {
         return _decryptAesGcm(_DecryptParams(
           ciphertext: ciphertext,
@@ -271,8 +271,8 @@ class FileTransferService {
     }
   }
 
-  /// Descarcă bytes urmărind redirect-uri manual (301/302/307/308).
-  /// Flutter http package nu urmărește automat redirect-urile pe GET în toate cazurile.
+  /// Downloads bytes while manually following redirects (301/302/307/308).
+  /// The Flutter http package does not always follow GET redirects automatically.
   static Future<Uint8List> _downloadWithRedirect(String url, {int maxRedirects = 6}) async {
     var currentUrl = url;
     for (var i = 0; i < maxRedirects; i++) {
@@ -285,12 +285,12 @@ class FileTransferService {
         if (response.bodyBytes.isEmpty) {
           throw Exception('Empty response from server: $currentUrl');
         }
-        // Verifică că nu e HTML (pagină de eroare în loc de fișier binar)
+        // Verify that this is not HTML (error page instead of binary file).
         final contentType = response.headers['content-type'] ?? '';
         if (contentType.contains('text/html')) {
           throw Exception(
             'The server returned HTML instead of a binary file. '
-            'URL posibil expirat sau invalid: $currentUrl'
+            'URL may be expired or invalid: $currentUrl'
           );
         }
         return response.bodyBytes;
@@ -312,7 +312,7 @@ class FileTransferService {
 
       throw Exception('HTTP ${response.statusCode} la $currentUrl');
     }
-    throw Exception('Prea multe redirect-uri pentru $url');
+    throw Exception('Too many redirects for $url');
   }
 
   static Future<T> _runWithTimeout<T>(
@@ -500,7 +500,7 @@ enum _UploadServer {
     final data = json['data'] as Map<String, dynamic>?;
     final url = data?['url']?.toString();
     if (url != null && url.startsWith('http')) {
-      // URL-ul API este de forma /123/file.bin; pentru download direct trebuie /dl/123/file.bin.
+      // The API URL is in the form /123/file.bin; direct download requires /dl/123/file.bin.
       return url.replaceFirst('tmpfiles.org/', 'tmpfiles.org/dl/');
     }
     throw Exception('Could not extract URL. Body: $body');
@@ -624,8 +624,8 @@ Uint8List _decryptAesGcm(_DecryptParams p) {
   final out = Uint8List(cipher.getOutputSize(input.length));
   var offset = 0;
   offset += cipher.processBytes(input, 0, input.length, out, offset);
-  // doFinal verifying tag-ul GCM și aruncă InvalidCipherTextException dacă nu se potrivește.
-  // Returnează numărul de bytes scriși (plaintext final) — trebuie adăugat la offset.
+  // doFinal verifies the GCM tag and throws InvalidCipherTextException if it does not match.
+  // Returns the number of bytes written (final plaintext); must be added to the offset.
   offset += cipher.doFinal(out, offset);
   return out.sublist(0, offset);
 }
