@@ -96,3 +96,13 @@ The project is actively developed and improved.
 Open source project.
 
 Source code is available for transparency and security review.
+## Feedback & Support
+
+Official Website:
+https://vaultchat.pro
+
+Report Bugs:
+https://github.com/blejusca/VaultChat/issues
+
+Community Discussions:
+https://github.com/blejusca/VaultChat/discussions
