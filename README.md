@@ -1,6 +1,6 @@
 # VaultChat
 
-Private, decentralized and encrypted messaging built on Nostr.
+VaultChat is a private, decentralized and end-to-end encrypted messenger built on the Nostr protocol.
 
 No phone number.
 No email.
@@ -24,9 +24,9 @@ https://vaultchat.pro
 - Encrypted identity backup and restore
 - Multi-relay support
 - No account required
+## Screenshots
 
 ---
-
 ## Why VaultChat?
 
 Most messaging platforms require:
