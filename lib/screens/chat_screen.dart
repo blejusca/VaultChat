@@ -19,6 +19,10 @@ class ChatScreen extends StatefulWidget {
   final NostrConnectionService connectionService;
   final Future<void> Function() onConversationChanged;
   final Future<void> Function(String peerPublicKey)? onConversationDeleted;
+  /// Contact display names keyed by lowercased public key.
+  /// Must be populated before this widget is built so sender labels are
+  /// correct from the first frame (Req 9).
+  final Map<String, String> contactsMap;
 
   const ChatScreen({
     super.key,
@@ -29,6 +33,7 @@ class ChatScreen extends StatefulWidget {
     required this.connectionService,
     required this.onConversationChanged,
     this.onConversationDeleted,
+    this.contactsMap = const {},
   });
 
   @override
@@ -54,6 +59,8 @@ class _ChatScreenState extends State<ChatScreen> {
       connectionService: widget.connectionService,
       onConversationChanged: widget.onConversationChanged,
       onConversationDeleted: widget.onConversationDeleted,
+      // Req 9: contacts must be loaded before rendering sender display names.
+      contactsMap: widget.contactsMap,
     );
     _stateSub = _ctrl.stateStream.listen((s) {
       if (!mounted) return;

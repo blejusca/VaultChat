@@ -391,8 +391,14 @@ class _VaultChatRootState extends State<VaultChatRoot>
           recipientPublicKey: normalizedRecipient,
           storageService: storage,
           connectionService: connection,
-          contactLabel: contactLabel,
+          peerLabel: contactLabel ?? normalizedRecipient.substring(0, 8),
           onConversationChanged: _reloadConversations,
+          // Req 9: pass full contact map so sender labels are resolved
+          // from contacts before the first frame renders.
+          contactsMap: {
+            for (final e in _contactsByKey.entries)
+              e.key: e.value.label,
+          },
           onConversationDeleted: (peerPublicKey) async {
             await _contactService?.deleteContact(peerPublicKey);
             final prefs = await SharedPreferences.getInstance();

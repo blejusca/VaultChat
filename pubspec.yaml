@@ -2,7 +2,7 @@ name: vaultchat
 description: VaultChat private decentralized encrypted messenger.
 publish_to: "none"
 
-version: 0.9.7+19
+version: 0.9.8+20
 
 environment:
   sdk: ">=3.5.0 <4.0.0"

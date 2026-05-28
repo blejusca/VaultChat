@@ -128,6 +128,12 @@ class _VaultChatRootState extends State<VaultChatRoot>
             await ctrl.reloadConversations();
             if (mounted) Navigator.of(context).pop();
           },
+          // Req 9: pass full contact map so sender labels are resolved
+          // from contacts before the first frame renders.
+          contactsMap: {
+            for (final e in state.contactsByKey.entries)
+              e.key: e.value.label,
+          },
         ),
       ),
     );

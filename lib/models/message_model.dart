@@ -10,9 +10,15 @@ class MessageModel {
   final String senderPublicKey;
   final String recipientPublicKey;
   final String peerPublicKey;
+  /// The original Nostr event `created_at` (or relay-confirmed timestamp).
+  /// This is the canonical timestamp used for sorting. Never overwritten by
+  /// download time, decrypt time, save time, or UI insert time.
   final DateTime createdAt;
+  /// Wall-clock time at which the client composed/sent the message.
+  /// Persisted for diagnostics only; the UI always sorts by [createdAt].
+  final DateTime? clientCreatedAt;
   final bool isFromRelay;
-  final DateTime? expiresAt; // NEW — null = never
+  final DateTime? expiresAt; // null = never
 
   const MessageModel({
     required this.id,
@@ -24,6 +30,7 @@ class MessageModel {
     required this.recipientPublicKey,
     required this.peerPublicKey,
     required this.createdAt,
+    this.clientCreatedAt,
     required this.isFromRelay,
     this.expiresAt,
   });
@@ -51,6 +58,7 @@ class MessageModel {
       'recipientPublicKey': recipientPublicKey,
       'peerPublicKey': peerPublicKey,
       'createdAtMillis': createdAt.millisecondsSinceEpoch,
+      'clientCreatedAtMillis': clientCreatedAt?.millisecondsSinceEpoch,
       'isFromRelay': isFromRelay,
       'expiresAtMillis': expiresAt?.millisecondsSinceEpoch,
     };
@@ -58,6 +66,7 @@ class MessageModel {
 
   factory MessageModel.fromMap(Map<dynamic, dynamic> map) {
     final createdAtMillis = map['createdAtMillis'];
+    final clientCreatedAtMillis = map['clientCreatedAtMillis'];
     final expiresAtMillis = map['expiresAtMillis'];
 
     final senderPublicKey = (map['senderPublicKey'] ?? '').toString();
@@ -76,25 +85,24 @@ class MessageModel {
       peerPublicKey: peerPublicKey.isNotEmpty
           ? peerPublicKey
           : (isMine ? recipientPublicKey : senderPublicKey),
-      createdAt: DateTime.fromMillisecondsSinceEpoch(
-        // Handle double values from Hive on older Android (e.g. Android 10)
-        createdAtMillis is int
-            ? createdAtMillis
-            : createdAtMillis is double
-                ? createdAtMillis.toInt()
-                : int.tryParse('$createdAtMillis') ?? 0,
-      ),
+      // Restore the original Nostr created_at — never let decode time replace it.
+      createdAt: DateTime.fromMillisecondsSinceEpoch(_parseMillis(createdAtMillis)),
+      clientCreatedAt: clientCreatedAtMillis != null
+          ? DateTime.fromMillisecondsSinceEpoch(_parseMillis(clientCreatedAtMillis))
+          : null,
       isFromRelay: map['isFromRelay'] == true,
       expiresAt: expiresAtMillis != null
-          ? DateTime.fromMillisecondsSinceEpoch(
-              expiresAtMillis is int
-                  ? expiresAtMillis
-                  : expiresAtMillis is double
-                      ? expiresAtMillis.toInt()
-                      : int.tryParse('$expiresAtMillis') ?? 0,
-            )
+          ? DateTime.fromMillisecondsSinceEpoch(_parseMillis(expiresAtMillis))
           : null,
     );
+  }
+
+  /// Safely parse a millis value that may arrive from Hive as int, double, or
+  /// String (observed on Android 10 with older Hive adapter versions).
+  static int _parseMillis(dynamic raw) {
+    if (raw is int) return raw;
+    if (raw is double) return raw.toInt();
+    return int.tryParse('$raw') ?? 0;
   }
 
   MessageModel copyWith({
@@ -107,6 +115,8 @@ class MessageModel {
     String? recipientPublicKey,
     String? peerPublicKey,
     DateTime? createdAt,
+    DateTime? clientCreatedAt,
+    bool clearClientCreatedAt = false,
     bool? isFromRelay,
     DateTime? expiresAt,
     bool clearExpiry = false,
@@ -121,6 +131,9 @@ class MessageModel {
       recipientPublicKey: recipientPublicKey ?? this.recipientPublicKey,
       peerPublicKey: peerPublicKey ?? this.peerPublicKey,
       createdAt: createdAt ?? this.createdAt,
+      clientCreatedAt: clearClientCreatedAt
+          ? null
+          : (clientCreatedAt ?? this.clientCreatedAt),
       isFromRelay: isFromRelay ?? this.isFromRelay,
       expiresAt: clearExpiry ? null : (expiresAt ?? this.expiresAt),
     );

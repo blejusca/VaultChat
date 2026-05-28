@@ -78,6 +78,8 @@ class ChatController {
     required this.connectionService,
     required this.onConversationChanged,
     this.onConversationDeleted,
+    // Req 9: contacts must be loaded before rendering sender display names.
+    this.contactsMap = const {},
   }) : conversationId = MessageModel.buildConversationId(
             myPublicKey, recipientPublicKey) {
     _init();
@@ -90,11 +92,19 @@ class ChatController {
   final NostrConnectionService connectionService;
   final Future<void> Function() onConversationChanged;
   final Future<void> Function(String peerPublicKey)? onConversationDeleted;
+  /// Contact display names keyed by lowercased public key.
+  /// Must be populated before constructing this controller (Req 9).
+  final Map<String, String> contactsMap;
 
   // ── Pagination ──────────────────────────────────────────────────────────────
   static const int _pageSize = 50;
   bool _hasMoreMessages = true;
   DateTime? _oldestLoaded;
+
+  // ── In-memory dedup (Reqs 3, 5) ────────────────────────────────────────────
+  // Tracks eventIds already in the in-memory list so relay echoes and duplicate
+  // deliveries never appear as a second bubble in the UI.
+  final Set<String> _seenMessageIds = <String>{};
 
   // ── State stream ──────────────────────────────────────────────────────────
   final _stateController = StreamController<ChatState>.broadcast();
@@ -112,6 +122,7 @@ class ChatController {
     if (!_stateController.isClosed) _stateController.add(next);
   }
 
+  // Req 1: exactly one active relay subscription per conversation.
   StreamSubscription<SecureChatConnectionSnapshot>? _statusSub;
   StreamSubscription<MessageModel>? _messageSub;
   StreamSubscription<RemoteConversationCommand>? _commandSub;
@@ -123,15 +134,31 @@ class ChatController {
       _emit(_state.copyWith(connectionSnapshot: snap));
     });
 
+    // Req 1 & 2: cancel any prior subscription before subscribing.
+    _messageSub?.cancel();
     _messageSub = connectionService.messageStream.listen((msg) async {
       final msgConvId = MessageModel.buildConversationId(
           msg.senderPublicKey, msg.recipientPublicKey);
       if (msgConvId != conversationId) return;
-      await storageService.saveMessage(msg);
-      _emit(_state.copyWith(messages: [..._state.messages, msg]));
+
+      // Req 3 & 5: deduplicate by eventId before touching memory or UI.
+      final msgId = msg.id.trim();
+      if (msgId.isEmpty || _seenMessageIds.contains(msgId)) return;
+
+      // Req 9: enrich sender label from contacts before rendering.
+      final enriched = _enrichLabel(msg);
+
+      await storageService.saveMessage(enriched);
+
+      // Register id only after the dedup check passes so the message is
+      // tracked for future relay echo suppression.
+      _seenMessageIds.add(msgId);
+      _emit(_state.copyWith(messages: [..._state.messages, enriched]));
       await onConversationChanged();
     });
 
+    // Req 2: cancel stale command subscription.
+    _commandSub?.cancel();
     _commandSub = connectionService.commandStream.listen((cmd) {
       if (!cmd.isDeleteConversation) return;
       if (cmd.conversationId != conversationId) return;
@@ -139,6 +166,15 @@ class ChatController {
     });
 
     loadInitialMessages();
+  }
+
+  /// Resolve sender label from [contactsMap] (Req 9).
+  /// Falls back to the label already on the message when no contact entry exists.
+  MessageModel _enrichLabel(MessageModel msg) {
+    final key = msg.senderPublicKey.trim().toLowerCase();
+    final name = contactsMap[key];
+    if (name != null && name.isNotEmpty) return msg.copyWith(senderLabel: name);
+    return msg;
   }
 
   // ── Real pagination ────────────────────────────────────────────────────────
@@ -154,16 +190,26 @@ class ChatController {
     } else {
       _hasMoreMessages = false;
     }
+    // Req 3 & 5: seed in-memory dedup set from persisted messages so relay
+    // echoes of already-stored messages are never added as duplicates.
+    for (final m in page) {
+      final id = m.id.trim();
+      if (id.isNotEmpty) _seenMessageIds.add(id);
+    }
     _emit(_state.copyWith(messages: page));
   }
 
   /// Called when scrolling up; returns true if messages were loaded.
   Future<bool> loadMoreMessages() async {
     if (!_hasMoreMessages) return false;
+    // Track both createdAt and id for the (createdAt, id) pagination cursor
+    // so messages with equal timestamps are never split across pages (Req 7).
+    final oldestId = _state.messages.isNotEmpty ? _state.messages.first.id : null;
     final page = await storageService.loadConversationPage(
       conversationId,
       pageSize: _pageSize,
       before: _oldestLoaded,
+      beforeId: oldestId,
     );
     if (page.isEmpty) {
       _hasMoreMessages = false;
@@ -171,6 +217,11 @@ class ChatController {
     }
     _oldestLoaded = page.first.createdAt;
     _hasMoreMessages = page.length >= _pageSize;
+    // Seed newly loaded historical ids into the dedup set.
+    for (final m in page) {
+      final id = m.id.trim();
+      if (id.isNotEmpty) _seenMessageIds.add(id);
+    }
     _emit(_state.copyWith(messages: [...page, ..._state.messages]));
     return true;
   }
@@ -199,10 +250,16 @@ class ChatController {
         senderPublicKey: myPublicKey,
         recipientPublicKey: recipientPublicKey,
         peerPublicKey: recipientPublicKey,
+        // Req 6: createdAt = relay-signed Nostr created_at (canonical sort key).
         createdAt: result.createdAt,
+        // Req 6: clientCreatedAt = wall-clock compose time, for diagnostics.
+        clientCreatedAt: result.clientCreatedAt,
         isFromRelay: false,
       );
       await storageService.saveMessage(msg);
+      // Req 4 & 5: register the same eventId used for the local optimistic
+      // message so the relay echo is recognised and suppressed.
+      _seenMessageIds.add(result.eventId);
       _emit(_state.copyWith(
         isSending: false,
         messages: [..._state.messages, msg],
@@ -273,10 +330,13 @@ class ChatController {
         recipientPublicKey: recipientPublicKey,
         peerPublicKey: recipientPublicKey,
         createdAt: sendResult.createdAt,
+        clientCreatedAt: sendResult.clientCreatedAt,
         isFromRelay: false,
       );
 
       await storageService.saveMessage(msg);
+      // Req 4 & 5: register the eventId so the relay echo is suppressed.
+      _seenMessageIds.add(sendResult.eventId);
       _emit(_state.copyWith(
         isUploadingAttachment: false,
         transferStatus: 'File sent.',

@@ -35,11 +35,16 @@ class SecureChatConnectionSnapshot {
 
 class SentDirectMessageResult {
   final String eventId;
+  /// Original Nostr event `created_at` — the canonical timestamp for sorting.
   final DateTime createdAt;
+  /// Wall-clock time the client composed the message before encryption.
+  /// Stored for diagnostics; UI always sorts by [createdAt].
+  final DateTime clientCreatedAt;
 
   const SentDirectMessageResult({
     required this.eventId,
     required this.createdAt,
+    required this.clientCreatedAt,
   });
 }
 
@@ -436,6 +441,7 @@ class NostrConnectionService {
     required String payload,
     required String fallbackSeed,
   }) async {
+    final clientCreatedAt = DateTime.now();
     final encrypted = await Nip44Service.encrypt(
       plaintext: payload,
       senderPrivKeyHex: _keyPair.private,
@@ -469,6 +475,7 @@ class NostrConnectionService {
               ? 'nostr_$directId'
               : 'local_cmd_${_stableHash('$recipientPublicKey|$fallbackSeed|${createdAt.millisecondsSinceEpoch}')}',
           createdAt: createdAt,
+          clientCreatedAt: clientCreatedAt,
         );
       },
       (failure) {
@@ -487,7 +494,11 @@ class NostrConnectionService {
     required String plainText,
     bool rawPayload = false,
   }) async {
-    final payload = rawPayload ? plainText : _encodeTextPayload(plainText);
+    // Record wall-clock compose time before encryption (Req 6: clientCreatedAt).
+    final clientCreatedAt = DateTime.now();
+    final payload = rawPayload
+        ? plainText
+        : _encodeTextPayload(plainText, clientCreatedAt: clientCreatedAt);
     final encrypted = await Nip44Service.encrypt(
       plaintext: payload,
       senderPrivKeyHex: _keyPair.private,
@@ -518,6 +529,7 @@ class NostrConnectionService {
         return SentDirectMessageResult(
           eventId: eventId,
           createdAt: _eventCreatedAt(event),
+          clientCreatedAt: clientCreatedAt,
         );
       },
       (failure) {
@@ -592,12 +604,15 @@ class NostrConnectionService {
   }
 
 
-  String _encodeTextPayload(String text) {
+  String _encodeTextPayload(String text, {DateTime? clientCreatedAt}) {
     return jsonEncode(<String, dynamic>{
       'v': 1,
       'type': 'text',
       'text': text,
-      'createdAtMillis': DateTime.now().millisecondsSinceEpoch,
+      // clientCreatedAtMillis: wall-clock compose time, for diagnostics only.
+      // The relay-signed created_at is used for all sorting (Req 6 & 8).
+      'clientCreatedAtMillis':
+          (clientCreatedAt ?? DateTime.now()).millisecondsSinceEpoch,
     });
   }
 

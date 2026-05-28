@@ -436,21 +436,32 @@ class ConversationStorageService {
 
   /// Pagination: load [pageSize] messages before [before] (exclusive).
   /// Returns messages in chronological order (oldest first).
-  /// First page: call with [before] = null.
+  /// First page: call with [before] = null / [beforeId] = null.
+  ///
+  /// The cursor is an (createdAt, id) pair so that messages sharing the same
+  /// timestamp are never split across page boundaries (Req 7).
   ///
   /// Usage example in ChatScreen:
   ///   final page = await storageService.loadConversationPage(
-  ///     conversationId, pageSize: 50, before: oldestLoadedMessage?.createdAt);
+  ///     conversationId, pageSize: 50,
+  ///     before: oldest?.createdAt, beforeId: oldest?.id);
   Future<List<MessageModel>> loadConversationPage(
     String conversationId, {
     int pageSize = 50,
     DateTime? before,
+    String? beforeId,
   }) async {
     final all = await loadConversation(conversationId);
-    // all is already sorted ascending (oldest first)
+    // all is already sorted ascending (oldest first) with id as tie-breaker.
     final filtered = before == null
         ? all
-        : all.where((m) => m.createdAt.isBefore(before)).toList();
+        : all.where((m) {
+            final cmp = m.createdAt.compareTo(before);
+            if (cmp < 0) return true;
+            // Same timestamp: keep only messages whose id sorts before the cursor.
+            if (cmp == 0 && beforeId != null) return m.id.compareTo(beforeId) < 0;
+            return false;
+          }).toList();
 
     if (filtered.length <= pageSize) return filtered;
     return filtered.sublist(filtered.length - pageSize);
